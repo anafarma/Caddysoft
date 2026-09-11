@@ -16,11 +16,18 @@ export type AssetStorageAdapter = {
   deleteObject(input: { storageKey: string }): Promise<void>;
 };
 
+function requireBlobToken() {
+  const token = process.env.BLOB_READ_WRITE_TOKEN;
+  if (!token) throw new Error("ASSET_STORAGE_NOT_CONFIGURED");
+  return token;
+}
+
 async function createSignedUrl(input: {
   pathname: string;
   operation: "put" | "get";
   validForMs: number;
 }) {
+  requireBlobToken();
   const validUntil = Date.now() + input.validForMs;
   const token = await issueSignedToken({
     pathname: input.pathname,
@@ -44,11 +51,7 @@ const vercelBlobStorageAdapter: AssetStorageAdapter = {
       operation: "put",
       validForMs: UPLOAD_URL_TTL_MS,
     });
-
-    return {
-      uploadUrl: result.presignedUrl,
-      expiresAt: result.expiresAt,
-    };
+    return { uploadUrl: result.presignedUrl, expiresAt: result.expiresAt };
   },
 
   async createDownloadUrl(input) {
@@ -57,22 +60,15 @@ const vercelBlobStorageAdapter: AssetStorageAdapter = {
       operation: "get",
       validForMs: DOWNLOAD_URL_TTL_MS,
     });
-
-    return {
-      downloadUrl: result.presignedUrl,
-      expiresAt: result.expiresAt,
-    };
+    return { downloadUrl: result.presignedUrl, expiresAt: result.expiresAt };
   },
 
   async deleteObject(input) {
-    await del(input.storageKey, { token: process.env.BLOB_READ_WRITE_TOKEN });
+    await del(input.storageKey, { token: requireBlobToken() });
   },
 };
 
 export function getAssetStorageAdapter(): AssetStorageAdapter {
-  if (!process.env.BLOB_READ_WRITE_TOKEN && !process.env.VERCEL) {
-    throw new Error("ASSET_STORAGE_NOT_CONFIGURED");
-  }
-
+  requireBlobToken();
   return vercelBlobStorageAdapter;
 }
