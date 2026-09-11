@@ -2,7 +2,7 @@
 
 ## Scope
 
-M3 establishes the authenticated asset catalog and the storage lifecycle boundary. Assets belong to the signed-in application user and may optionally belong to one of that user's projects.
+M3 establishes the authenticated asset catalog, private binary storage boundary, browser-direct upload lifecycle, and asynchronous storage cleanup. Assets belong to the signed-in application user and may optionally belong to one of that user's projects.
 
 The engine separates **asset metadata/catalogue** from **binary storage**. `storageKey` identifies the storage object, while the storage adapter handles provider-specific signing and deletion without exposing provider credentials to the browser.
 
@@ -38,7 +38,7 @@ The browser uploads directly to storage and never receives the Blob store creden
 
 ### `POST /api/assets/[assetId]/complete`
 
-Finalizes a browser upload. The server authenticates ownership, verifies the object exists in storage using provider metadata, and marks the asset `READY` while persisting authoritative MIME type, byte size, and ETag metadata.
+Finalizes a browser upload. The server authenticates ownership, verifies the object exists in private storage, and marks the asset `READY` while persisting authoritative MIME type, byte size, and ETag metadata.
 
 ### `POST /api/assets/[assetId]/upload-url`
 
@@ -54,39 +54,72 @@ Returns one active asset only when it belongs to the authenticated user.
 
 ### `DELETE /api/assets/[assetId]`
 
-Soft-deletes an owned asset. Binary cleanup remains decoupled from catalog deletion so retention and asynchronous cleanup can be introduced without making the request path destructive.
+Soft-deletes an owned asset. The request does not synchronously destroy binary storage.
 
 ## Storage provider
 
-The concrete M3 provider is **Vercel Blob Private Storage** through `@vercel/blob`. Upload and download access is granted with narrowly scoped signed URLs; the application server retains the storage credential/OIDC capability and the browser receives only an operation-specific URL.
+The concrete M3 provider is **Vercel Blob Private Storage** through `@vercel/blob`.
 
-The adapter uses short TTLs:
+The storage adapter requires `BLOB_READ_WRITE_TOKEN`; Vercel runtime presence alone is not treated as sufficient configuration. This prevents a deployment from appearing healthy while storage credentials are absent.
+
+The adapter uses operation-scoped signed URLs:
 - upload: 15 minutes
 - download: 5 minutes
-
-Vercel Blob signed URLs support operation scoping (`put`/`get`) and expiration, which matches the provider-neutral storage boundary. See the official Vercel documentation for the current signed-URL model. 
 
 ## Security invariants
 
 1. Every asset read/write is scoped by `userId`.
 2. Project assignment is validated through the same user-scoped project lookup.
 3. Deleted assets are excluded from normal catalog reads.
-4. Browser clients never receive the Blob read/write credential.
-5. Browser upload paths are generated server-side rather than accepted from the client.
+4. Browser clients never receive the Blob store credential.
+5. Browser upload paths are generated server-side.
 6. Upload/download URLs are short-lived and operation-scoped.
 7. Uploaded bytes are verified from storage before an asset is marked `READY`.
 8. Asset metadata has bounded string fields and non-negative numeric validation.
+9. Cleanup is authenticated independently through `CRON_SECRET`.
 
 ## Lifecycle
 
 `prepare-upload → PENDING → browser PUT → complete → READY → soft delete → asynchronous storage cleanup`
 
-A failed preparation does not attempt an unsafe compensating delete in the request path. The resulting pending record remains observable so a future cleanup worker can reconcile stale database rows and orphaned objects safely.
+Cleanup policy:
+- stale `PENDING` records older than 24 hours are reconciled;
+- soft-deleted assets older than 7 days are eligible for binary deletion;
+- successful storage deletion is recorded in metadata as `storageDeletedAt`;
+- database records are retained for referential integrity and auditability.
 
-## Remaining M3 work
+The cleanup worker processes bounded batches so a large backlog does not turn one invocation into an unbounded operation.
 
-- Browser upload flow with progress and retry handling.
-- Asset Library UI with filtering, preview, metadata, and deletion.
-- Thumbnail/preview generation pipeline for image/video/audio assets.
-- Stale `PENDING` reconciliation and soft-delete storage cleanup job.
-- End-to-end deployment verification against a real Vercel Blob store.
+## Scheduled cleanup
+
+Vercel Cron invokes `/api/cron/assets-cleanup` daily at `03:20 UTC`.
+
+The endpoint requires:
+`Authorization: Bearer $CRON_SECRET`
+
+The route never accepts a user-supplied storage key and only operates on database-selected asset records.
+
+## UI
+
+The Asset Library is available at `/assets` and is backed by the authenticated asset APIs. It supports catalog filtering, image/video previews, direct-to-Blob upload, completion verification, and soft deletion.
+
+## M3 completion criteria
+
+- [x] Asset data model
+- [x] User/project ownership
+- [x] Authenticated catalog API
+- [x] Asset lookup
+- [x] Soft delete
+- [x] Provider-neutral storage boundary
+- [x] Vercel Blob private-storage adapter
+- [x] Signed upload/download URLs
+- [x] Browser-direct upload lifecycle
+- [x] Storage verification before READY
+- [x] Stale PENDING reconciliation
+- [x] Soft-delete storage cleanup
+- [x] Scheduled cleanup route
+- [x] Asset Library UI
+- [ ] Live deployment verification with configured Blob + database
+- [ ] Dedicated media thumbnail/transcoding pipeline
+
+The remaining unchecked items are intentionally environment/runtime work or a separate media-processing layer, not missing catalog/storage primitives.
