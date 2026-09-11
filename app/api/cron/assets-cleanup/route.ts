@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAssetStorageAdapter } from "@/src/lib/assets/storage";
-import { listDeletedAssets, listStalePendingAssets, markAssetDeleted } from "@/src/lib/db/repositories";
+import { listDeletedAssets, listStalePendingAssets, markAssetDeleted, markAssetStorageDeleted } from "@/src/lib/db/repositories";
 
 const PENDING_RETENTION_MS = 24 * 60 * 60 * 1000;
 const DELETED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -8,8 +8,7 @@ const BATCH_SIZE = 100;
 
 function authorized(request: Request) {
   const secret = process.env.CRON_SECRET;
-  if (!secret) return false;
-  return request.headers.get("authorization") === `Bearer ${secret}`;
+  return Boolean(secret) && request.headers.get("authorization") === `Bearer ${secret}`;
 }
 
 export async function GET(request: Request) {
@@ -24,18 +23,18 @@ export async function GET(request: Request) {
   let pendingMarkedDeleted = 0;
   let deletedScanned = 0;
   let storageDeleteFailures = 0;
+  let storageDeleted = 0;
 
   const stalePending = await listStalePendingAssets(pendingBefore, BATCH_SIZE);
   for (const asset of stalePending) {
     pendingScanned++;
     try {
       await adapter.deleteObject({ storageKey: asset.storageKey });
+      if (await markAssetDeleted(asset.id)) pendingMarkedDeleted++;
     } catch (error) {
       storageDeleteFailures++;
       console.error("ASSET_PENDING_STORAGE_DELETE_FAILED", asset.id, error);
-      continue;
     }
-    if (await markAssetDeleted(asset.id)) pendingMarkedDeleted++;
   }
 
   const deletedAssets = await listDeletedAssets(deletedBefore, BATCH_SIZE);
@@ -43,6 +42,7 @@ export async function GET(request: Request) {
     deletedScanned++;
     try {
       await adapter.deleteObject({ storageKey: asset.storageKey });
+      if (await markAssetStorageDeleted(asset.id)) storageDeleted++;
     } catch (error) {
       storageDeleteFailures++;
       console.error("ASSET_DELETED_STORAGE_DELETE_FAILED", asset.id, error);
@@ -52,7 +52,7 @@ export async function GET(request: Request) {
   return NextResponse.json({
     ok: true,
     pending: { scanned: pendingScanned, markedDeleted: pendingMarkedDeleted },
-    deleted: { scanned: deletedScanned },
+    deleted: { scanned: deletedScanned, storageDeleted },
     storageDeleteFailures,
   });
 }
