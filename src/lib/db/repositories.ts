@@ -1,6 +1,6 @@
 import { desc, eq, and, isNull } from "drizzle-orm";
 import { getDb } from "./index";
-import { assets, projects, scenes } from "./schema";
+import { assets, projects, scenes, assetKind } from "./schema";
 import type { Asset } from "./schema";
 
 export async function listProjects(userId: string) {
@@ -60,7 +60,7 @@ export async function createAsset(userId: string, input: CreateAssetInput) {
   const storageKey = input.storageKey.trim();
   if (!name || name.length > 200) throw new Error("INVALID_ASSET_NAME");
   if (!storageKey || storageKey.length > 1000) throw new Error("INVALID_STORAGE_KEY");
-  if (!input.kind) throw new Error("INVALID_ASSET_KIND");
+  if (!input.kind || !ASSET_KINDS.includes(input.kind)) throw new Error("INVALID_ASSET_KIND");
   if (input.mimeType && input.mimeType.length > 255) throw new Error("INVALID_MIME_TYPE");
   validateNonNegative(input.byteSize, "INVALID_BYTE_SIZE");
   validateNonNegative(input.durationMs, "INVALID_DURATION");
@@ -84,3 +84,5 @@ export async function createAsset(userId: string, input: CreateAssetInput) {
   if (!rows[0]) throw new Error("ASSET_CREATE_FAILED");
   return rows[0];
 }
+
+export { ASSET_KINDS, assetKind };
