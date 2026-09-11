@@ -55,7 +55,7 @@ export async function pollGeneration(userId: string, generationId: string): Prom
   if (!account) throw new Error("PROVIDER_ACCOUNT_NOT_FOUND");
   const result = await adapter.poll(generation.providerOperationId, {
     id: account.id, providerId: account.providerId, status: account.status, remainingToday: account.remainingToday,
-    cooldownUntil: account.cooldownUntil, lastUsedAt: account.lastUsedAt, metadata: account.metadata,
+    cooldownUntil: account.cooldownUntil, lastUsedAt: account.lastUsedAt, credentialRef: account.credentialRef, metadata: account.metadata,
   });
   if (result.status === "COMPLETED") {
     await completeGeneration(userId, generationId);
