@@ -5,6 +5,7 @@ export type ProviderAccountCandidate = {
   remainingToday: number | null;
   cooldownUntil: Date | null;
   lastUsedAt: Date | null;
+  credentialRef: string;
   metadata: Record<string, unknown>;
 };
 
