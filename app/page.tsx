@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 const projects = [
   { name: "Untitled Project", scenes: 0, status: "Ready" },
   { name: "Product Launch", scenes: 8, status: "In progress" },
@@ -12,7 +14,7 @@ export default function Home() {
         <div style={{ color: "#71717a", fontSize: 12, marginTop: 6 }}>Production workspace</div>
         <nav style={{ marginTop: 42, display: "grid", gap: 8 }}>
           {['Studio', 'Projects', 'Storyboard', 'Assets', 'Characters', 'Locations', 'Styles'].map((item, i) => (
-            <div key={item} style={{ padding: "11px 12px", borderRadius: 10, background: i === 0 ? "#18181b" : "transparent", color: i === 0 ? "#fff" : "#a1a1aa" }}>{item}</div>
+            item === "Assets" ? <Link key={item} href="/assets" style={{ padding: "11px 12px", borderRadius: 10, background: "transparent", color: "#a1a1aa", textDecoration: "none" }}>{item}</Link> : <div key={item} style={{ padding: "11px 12px", borderRadius: 10, background: i === 0 ? "#18181b" : "transparent", color: i === 0 ? "#fff" : "#a1a1aa" }}>{item}</div>
           ))}
         </nav>
         <div style={{ marginTop: 48, borderTop: "1px solid #242428", paddingTop: 20, color: "#71717a", fontSize: 12 }}>SYSTEM</div>
