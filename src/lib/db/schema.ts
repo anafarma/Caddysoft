@@ -61,6 +61,27 @@ export const assets = pgTable("assets", {
   ...timestamps,
 }, (t) => [index("assets_user_kind_idx").on(t.userId, t.kind), index("assets_project_idx").on(t.projectId), index("assets_deleted_idx").on(t.deletedAt)]);
 
+export const assetDerivatives = pgTable("asset_derivatives", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  assetId: uuid("asset_id").notNull().references(() => assets.id),
+  kind: text("kind").notNull(),
+  status: text("status").default("PENDING").notNull(),
+  storageKey: text("storage_key").notNull().unique(),
+  mimeType: text("mime_type"),
+  byteSize: integer("byte_size"),
+  durationMs: integer("duration_ms"),
+  width: integer("width"),
+  height: integer("height"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}).notNull(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  ...timestamps,
+}, (t) => [
+  uniqueIndex("asset_derivatives_source_kind_idx").on(t.assetId, t.kind),
+  index("asset_derivatives_asset_idx").on(t.assetId),
+  index("asset_derivatives_status_idx").on(t.status),
+  index("asset_derivatives_deleted_idx").on(t.deletedAt),
+]);
+
 export const characters = pgTable("characters", {
   id: uuid("id").defaultRandom().primaryKey(),
   userId: uuid("user_id").notNull().references(() => users.id),
@@ -217,5 +238,6 @@ export type User = typeof users.$inferSelect;
 export type Project = typeof projects.$inferSelect;
 export type Scene = typeof scenes.$inferSelect;
 export type Asset = typeof assets.$inferSelect;
+export type AssetDerivative = typeof assetDerivatives.$inferSelect;
 export type Generation = typeof generations.$inferSelect;
 export type Job = typeof jobs.$inferSelect;
