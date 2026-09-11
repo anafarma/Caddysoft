@@ -2,9 +2,22 @@ import { desc, eq, and } from "drizzle-orm";
 import { getDb } from "./index";
 import { projects, scenes } from "./schema";
 
-/** All project reads are scoped by the authenticated application user. */
 export async function listProjects(userId: string) {
   return getDb().select().from(projects).where(eq(projects.userId, userId)).orderBy(desc(projects.createdAt));
+}
+
+export async function createProject(userId: string, input: { name: string; description?: string | null }) {
+  const name = input.name.trim();
+  if (!name || name.length > 120) throw new Error("INVALID_PROJECT_NAME");
+  const description = input.description?.trim() || null;
+  if (description && description.length > 2000) throw new Error("INVALID_PROJECT_DESCRIPTION");
+
+  const rows = await getDb()
+    .insert(projects)
+    .values({ userId, name, description })
+    .returning();
+  if (!rows[0]) throw new Error("PROJECT_CREATE_FAILED");
+  return rows[0];
 }
 
 export async function getProject(userId: string, projectId: string) {
