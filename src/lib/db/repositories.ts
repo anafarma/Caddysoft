@@ -1,6 +1,7 @@
-import { desc, eq, and } from "drizzle-orm";
+import { desc, eq, and, isNull } from "drizzle-orm";
 import { getDb } from "./index";
-import { projects, scenes } from "./schema";
+import { assets, projects, scenes } from "./schema";
+import type { Asset } from "./schema";
 
 export async function listProjects(userId: string) {
   return getDb().select().from(projects).where(eq(projects.userId, userId)).orderBy(desc(projects.createdAt));
@@ -11,21 +12,13 @@ export async function createProject(userId: string, input: { name: string; descr
   if (!name || name.length > 120) throw new Error("INVALID_PROJECT_NAME");
   const description = input.description?.trim() || null;
   if (description && description.length > 2000) throw new Error("INVALID_PROJECT_DESCRIPTION");
-
-  const rows = await getDb()
-    .insert(projects)
-    .values({ userId, name, description })
-    .returning();
+  const rows = await getDb().insert(projects).values({ userId, name, description }).returning();
   if (!rows[0]) throw new Error("PROJECT_CREATE_FAILED");
   return rows[0];
 }
 
 export async function getProject(userId: string, projectId: string) {
-  const rows = await getDb()
-    .select()
-    .from(projects)
-    .where(and(eq(projects.id, projectId), eq(projects.userId, userId)))
-    .limit(1);
+  const rows = await getDb().select().from(projects).where(and(eq(projects.id, projectId), eq(projects.userId, userId))).limit(1);
   return rows[0] ?? null;
 }
 
@@ -33,4 +26,61 @@ export async function listScenes(userId: string, projectId: string) {
   const project = await getProject(userId, projectId);
   if (!project) return null;
   return getDb().select().from(scenes).where(eq(scenes.projectId, projectId)).orderBy(scenes.position);
+}
+
+const ASSET_KINDS = ["IMAGE", "VIDEO", "AUDIO", "CHARACTER", "LOCATION", "LOGO", "REFERENCE", "OTHER"] as const;
+type AssetKind = (typeof ASSET_KINDS)[number];
+
+export type CreateAssetInput = {
+  projectId?: string | null;
+  kind?: AssetKind;
+  name: string;
+  storageKey: string;
+  mimeType?: string | null;
+  byteSize?: number | null;
+  durationMs?: number | null;
+  width?: number | null;
+  height?: number | null;
+  metadata?: Record<string, unknown>;
+};
+
+function validateNonNegative(value: number | null | undefined, code: string) {
+  if (value != null && (!Number.isSafeInteger(value) || value < 0)) throw new Error(code);
+}
+
+export async function listAssets(userId: string, filters: { projectId?: string | null; kind?: AssetKind | null } = {}): Promise<Asset[]> {
+  const conditions = [eq(assets.userId, userId), isNull(assets.deletedAt)];
+  if (filters.projectId) conditions.push(eq(assets.projectId, filters.projectId));
+  if (filters.kind) conditions.push(eq(assets.kind, filters.kind));
+  return getDb().select().from(assets).where(and(...conditions)).orderBy(desc(assets.createdAt));
+}
+
+export async function createAsset(userId: string, input: CreateAssetInput) {
+  const name = input.name.trim();
+  const storageKey = input.storageKey.trim();
+  if (!name || name.length > 200) throw new Error("INVALID_ASSET_NAME");
+  if (!storageKey || storageKey.length > 1000) throw new Error("INVALID_STORAGE_KEY");
+  if (!input.kind) throw new Error("INVALID_ASSET_KIND");
+  if (input.mimeType && input.mimeType.length > 255) throw new Error("INVALID_MIME_TYPE");
+  validateNonNegative(input.byteSize, "INVALID_BYTE_SIZE");
+  validateNonNegative(input.durationMs, "INVALID_DURATION");
+  validateNonNegative(input.width, "INVALID_WIDTH");
+  validateNonNegative(input.height, "INVALID_HEIGHT");
+  if (input.projectId && !(await getProject(userId, input.projectId))) throw new Error("PROJECT_NOT_FOUND");
+
+  const rows = await getDb().insert(assets).values({
+    userId,
+    projectId: input.projectId ?? null,
+    kind: input.kind,
+    name,
+    storageKey,
+    mimeType: input.mimeType ?? null,
+    byteSize: input.byteSize ?? null,
+    durationMs: input.durationMs ?? null,
+    width: input.width ?? null,
+    height: input.height ?? null,
+    metadata: input.metadata ?? {},
+  }).returning();
+  if (!rows[0]) throw new Error("ASSET_CREATE_FAILED");
+  return rows[0];
 }
