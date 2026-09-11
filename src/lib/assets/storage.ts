@@ -16,29 +16,27 @@ export type AssetStorageAdapter = {
   deleteObject(input: { storageKey: string }): Promise<void>;
 };
 
-function requireBlobToken() {
-  const token = process.env.BLOB_READ_WRITE_TOKEN;
-  if (!token) throw new Error("ASSET_STORAGE_NOT_CONFIGURED");
-  return token;
-}
-
 async function createSignedUrl(input: {
   pathname: string;
   operation: "put" | "get";
   validForMs: number;
+  contentType?: string;
+  byteSize?: number;
 }) {
-  requireBlobToken();
   const validUntil = Date.now() + input.validForMs;
   const token = await issueSignedToken({
     pathname: input.pathname,
     operations: [input.operation],
     validUntil,
+    ...(input.contentType ? { allowedContentType: input.contentType } : {}),
+    ...(input.byteSize != null ? { maximumSizeInBytes: input.byteSize } : {}),
   });
 
   const { presignedUrl } = await presignUrl(token, {
     pathname: input.pathname,
     operation: input.operation,
     validUntil,
+    ...(input.operation === "get" ? { useCache: false } : {}),
   });
 
   return { presignedUrl, expiresAt: new Date(validUntil).toISOString() };
@@ -50,6 +48,8 @@ const vercelBlobStorageAdapter: AssetStorageAdapter = {
       pathname: input.storageKey,
       operation: "put",
       validForMs: UPLOAD_URL_TTL_MS,
+      contentType: input.contentType,
+      byteSize: input.byteSize,
     });
     return { uploadUrl: result.presignedUrl, expiresAt: result.expiresAt };
   },
@@ -64,11 +64,10 @@ const vercelBlobStorageAdapter: AssetStorageAdapter = {
   },
 
   async deleteObject(input) {
-    await del(input.storageKey, { token: requireBlobToken() });
+    await del(input.storageKey);
   },
 };
 
 export function getAssetStorageAdapter(): AssetStorageAdapter {
-  requireBlobToken();
   return vercelBlobStorageAdapter;
 }
