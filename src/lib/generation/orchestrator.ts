@@ -4,11 +4,13 @@ import { providerAccounts, providers } from "@/src/lib/db/schema";
 import { getGeneration, markGenerationStarted, setProviderOperation, completeGeneration, failGeneration } from "./repository";
 import { selectProviderAccount } from "@/src/lib/providers/account-selector";
 import { getProviderAdapter } from "@/src/lib/providers/registry";
+import { ensureProviderAdapters } from "@/src/lib/providers/bootstrap";
 import { classifyProviderError } from "@/src/lib/providers/errors";
 import { markAccountReady, markAccountCooldown, markAccountExhausted } from "@/src/lib/providers/account-state";
 import type { ProviderSubmission } from "@/src/lib/providers/types";
 
 export async function executeGeneration(userId: string, generationId: string) {
+  ensureProviderAdapters();
   const generation = await getGeneration(userId, generationId);
   if (!generation) throw new Error("GENERATION_NOT_FOUND");
   const provider = (await getDb().select().from(providers).where(and(eq(providers.id, generation.providerId), eq(providers.enabled, true))).limit(1))[0];
@@ -45,6 +47,7 @@ export async function executeGeneration(userId: string, generationId: string) {
 }
 
 export async function pollGeneration(userId: string, generationId: string): Promise<ProviderSubmission> {
+  ensureProviderAdapters();
   const generation = await getGeneration(userId, generationId);
   if (!generation?.providerOperationId) throw new Error("PROVIDER_OPERATION_NOT_FOUND");
   const provider = (await getDb().select().from(providers).where(and(eq(providers.id, generation.providerId), eq(providers.enabled, true))).limit(1))[0];
