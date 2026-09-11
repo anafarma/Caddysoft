@@ -11,6 +11,7 @@
     "db:migrate": "drizzle-kit migrate"
   },
   "dependencies": {
+    "@clerk/nextjs": "latest",
     "@vercel/analytics": "latest",
     "drizzle-orm": "latest",
     "next": "latest",
