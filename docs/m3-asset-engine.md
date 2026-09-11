@@ -1,125 +1,79 @@
 # M3 — Asset Engine
 
-## Scope
+M3 provides the authenticated asset catalog and private binary storage lifecycle. It is the stable foundation for M4 media processing.
 
-M3 establishes the authenticated asset catalog, private binary storage boundary, browser-direct upload lifecycle, and asynchronous storage cleanup. Assets belong to the signed-in application user and may optionally belong to one of that user's projects.
+## Storage contract
+- Asset metadata is user-scoped.
+- Binary objects use server-generated storage keys.
+- Browser uploads use short-lived, operation-scoped Vercel Blob signed URLs.
+- Vercel Blob supports OIDC; the application no longer requires a long-lived Blob token merely to construct the storage adapter.
+- Upload URLs can be constrained by MIME type and expected maximum byte size.
+- Download URLs are short-lived and use cache-bypassing reads where immediate consistency matters.
+- Browser clients never receive the storage credential.
 
-The engine separates **asset metadata/catalogue** from **binary storage**. `storageKey` identifies the storage object, while the storage adapter handles provider-specific signing and deletion without exposing provider credentials to the browser.
-
-## Current contract
-
-### `GET /api/assets`
-
-Returns active assets for the authenticated user, newest first.
-
-Optional query parameters:
-- `projectId` — restrict to one owned project.
-- `kind` — `IMAGE | VIDEO | AUDIO | CHARACTER | LOCATION | LOGO | REFERENCE | OTHER`.
-
-### `POST /api/assets`
-
-Registers an already-established asset. Required fields:
-- `name`
-- `kind`
-- `storageKey`
-
-This remains available for provider/import workflows where the binary already exists.
-
-### `POST /api/assets/prepare-upload`
-
-Preferred browser-upload entry point. The server:
-1. authenticates the user;
-2. validates project ownership and asset metadata;
-3. generates a server-controlled storage key under `users/{userId}/assets/`;
-4. creates the asset record in `PENDING` state;
-5. returns a short-lived signed upload URL.
-
-The browser uploads directly to storage and never receives the Blob store credential.
-
-### `POST /api/assets/[assetId]/complete`
-
-Finalizes a browser upload. The server authenticates ownership, verifies the object exists in private storage, and marks the asset `READY` while persisting authoritative MIME type, byte size, and ETag metadata.
-
-### `POST /api/assets/[assetId]/upload-url`
-
-Legacy/direct storage boundary for an existing asset. Returns a short-lived signed upload URL after ownership verification.
-
-### `GET /api/assets/[assetId]/download-url`
-
-Returns a short-lived signed download URL after ownership verification.
-
-### `GET /api/assets/[assetId]`
-
-Returns one active asset only when it belongs to the authenticated user.
-
-### `DELETE /api/assets/[assetId]`
-
-Soft-deletes an owned asset. The request does not synchronously destroy binary storage.
-
-## Storage provider
-
-The concrete M3 provider is **Vercel Blob Private Storage** through `@vercel/blob`.
-
-The storage adapter requires `BLOB_READ_WRITE_TOKEN`; Vercel runtime presence alone is not treated as sufficient configuration. This prevents a deployment from appearing healthy while storage credentials are absent.
-
-The adapter uses operation-scoped signed URLs:
-- upload: 15 minutes
-- download: 5 minutes
-
-## Security invariants
-
-1. Every asset read/write is scoped by `userId`.
-2. Project assignment is validated through the same user-scoped project lookup.
-3. Deleted assets are excluded from normal catalog reads.
-4. Browser clients never receive the Blob store credential.
-5. Browser upload paths are generated server-side.
-6. Upload/download URLs are short-lived and operation-scoped.
-7. Uploaded bytes are verified from storage before an asset is marked `READY`.
-8. Asset metadata has bounded string fields and non-negative numeric validation.
-9. Cleanup is authenticated independently through `CRON_SECRET`.
-
-## Lifecycle
-
+## Asset lifecycle
 `prepare-upload → PENDING → browser PUT → complete → READY → soft delete → asynchronous storage cleanup`
 
-Cleanup policy:
-- stale `PENDING` records older than 24 hours are reconciled;
-- soft-deleted assets older than 7 days are eligible for binary deletion;
-- successful storage deletion is recorded in metadata as `storageDeletedAt`;
-- database records are retained for referential integrity and auditability.
+Cleanup:
+- stale PENDING assets older than 24 hours are reconciled;
+- deleted assets older than 7 days are eligible for binary deletion;
+- successful deletion is recorded as `storageDeletedAt`;
+- work is processed in bounded batches.
 
-The cleanup worker processes bounded batches so a large backlog does not turn one invocation into an unbounded operation.
+## M4 — Media Derivative Engine
 
-## Scheduled cleanup
+A derivative is a materialized representation of a source asset used by the editor or generation pipeline. Source and derivative objects have independent storage keys and lifecycle state.
 
-Vercel Cron invokes `/api/cron/assets-cleanup` daily at `03:20 UTC`.
+### Database
+`asset_derivatives` contains:
+- source `assetId`
+- derivative `kind`
+- `PENDING | READY | FAILED` status
+- private storage key
+- MIME
+- size
+- dimensions
+- duration
+- provider-neutral metadata
+- soft-delete timestamp
 
-The endpoint requires:
-`Authorization: Bearer $CRON_SECRET`
+The source + kind pair is unique for active derivative creation.
 
-The route never accepts a user-supplied storage key and only operates on database-selected asset records.
+### Supported derivative kinds
+- `THUMBNAIL` — image preview, generated as WebP.
+- `POSTER` — representative video frame, generated as WebP.
+- `WAVEFORM` — audio waveform visualization, generated as WebP.
 
-## UI
+### API
+- `GET /api/assets/[assetId]/derivatives` — list derivatives for an owned source asset.
+- `POST /api/assets/[assetId]/derivatives/prepare` — create/reuse a derivative record and return a scoped upload URL.
+- `POST /api/assets/[assetId]/derivatives/[derivativeId]/complete` — verify the uploaded derivative in private Blob storage and mark it READY.
 
-The Asset Library is available at `/assets` and is backed by the authenticated asset APIs. It supports catalog filtering, image/video previews, direct-to-Blob upload, completion verification, and soft deletion.
+### Browser processing
+The current M4 processor intentionally uses standard browser media primitives:
+- `Image.decode()` + Canvas for image thumbnails;
+- HTMLVideoElement + Canvas for video posters;
+- Web Audio `decodeAudioData()` + Canvas for waveform images.
 
-## M3 completion criteria
+This keeps the application deployable without adding a heavyweight FFmpeg/Sharp runtime to the first production slice. The derivative contract remains provider-neutral, so a dedicated worker can replace or augment the browser processor later without changing the database/API contract.
 
-- [x] Asset data model
-- [x] User/project ownership
-- [x] Authenticated catalog API
-- [x] Asset lookup
-- [x] Soft delete
-- [x] Provider-neutral storage boundary
-- [x] Vercel Blob private-storage adapter
-- [x] Signed upload/download URLs
-- [x] Browser-direct upload lifecycle
-- [x] Storage verification before READY
-- [x] Stale PENDING reconciliation
-- [x] Soft-delete storage cleanup
-- [x] Scheduled cleanup route
-- [x] Asset Library UI
-- [ ] Live deployment verification with configured Blob + database
-- [ ] Dedicated media thumbnail/transcoding pipeline
+### Processing flow
+`source asset → signed GET → browser media decode → derivative render → prepare derivative upload → signed PUT → complete/verify → READY`
 
-The remaining unchecked items are intentionally environment/runtime work or a separate media-processing layer, not missing catalog/storage primitives.
+A failed render/upload does not expose storage credentials. The source asset remains unchanged.
+
+## Production boundaries
+- M3/M4 work is confined to `anafarma/Caddysoft`.
+- No changes are made to Ana Farma production or `/dev`.
+- Runtime verification requires a deployed Caddysoft project with its own database/auth/storage environment. Existing Ana Farma Vercel projects must not be used as a substitute.
+
+## Remaining runtime work
+1. Connect Caddysoft to its own Vercel project.
+2. Connect private Blob storage to that project.
+3. Configure the Caddysoft database and Clerk environment.
+4. Apply migrations.
+5. Run build/lint and browser verification.
+6. Execute a real image/video/audio derivative round-trip.
+7. Only after those checks pass, continue to M5 Generation/Provider orchestration.
+
+These are environment-validation steps, not reasons to alter another project.
