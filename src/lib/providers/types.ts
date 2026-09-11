@@ -16,10 +16,19 @@ export type GenerationRequest = {
   config: Record<string, unknown>;
 };
 
+export type ProviderOutput = {
+  body: ReadableStream<Uint8Array> | Blob | ArrayBuffer;
+  mimeType: string;
+  byteSize?: number;
+  metadata?: Record<string, unknown>;
+  filename?: string;
+};
+
 export type ProviderSubmission = {
   operationId: string;
   status: "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED";
   raw?: Record<string, unknown>;
+  output?: ProviderOutput;
 };
 
 export interface ProviderAdapter {
