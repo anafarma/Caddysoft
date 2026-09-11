@@ -1,8 +1,8 @@
 import { and, eq } from "drizzle-orm";
 import { getDb } from "@/src/lib/db";
 import { generations, providerAccounts, providers, usageEvents } from "@/src/lib/db/schema";
-import { createAsset } from "@/src/lib/db/repositories";
-import { getGeneration, markGenerationStarted, setProviderOperation, completeGeneration, failGeneration, createGenerationVersion } from "./repository";
+import { createAsset, markAssetDeleted } from "@/src/lib/db/repositories";
+import { getGeneration, markGenerationStarted, setProviderOperation, completeGeneration, failGeneration, createGenerationVersion, listGenerationVersions } from "./repository";
 import { selectProviderAccount } from "@/src/lib/providers/account-selector";
 import { getProviderAdapter } from "@/src/lib/providers/registry";
 import { ensureProviderAdapters } from "@/src/lib/providers/bootstrap";
@@ -16,6 +16,7 @@ async function persistProviderOutput(userId: string, generation: Awaited<ReturnT
 
   const storageKey = `users/${userId}/projects/${generation.projectId}/generations/${generation.id}/output.mp4`;
   const storage = getAssetStorageAdapter();
+  let assetId: string | null = null;
 
   try {
     const uploaded = await storage.uploadStream({
@@ -39,22 +40,19 @@ async function persistProviderOutput(userId: string, generation: Awaited<ReturnT
         uploadState: "COMPLETE",
       },
     });
+    assetId = asset.id;
 
     const version = await createGenerationVersion(
       generation.id,
-      {
-        model: generation.model,
-        prompt: generation.promptSnapshot,
-        config: generation.requestConfig,
-      },
+      { model: generation.model, prompt: generation.promptSnapshot, config: generation.requestConfig },
       result.raw,
       asset.id,
     );
-
     if (!version) throw new Error("GENERATION_VERSION_CREATE_FAILED");
 
     return asset;
   } catch (error) {
+    if (assetId) await markAssetDeleted(assetId).catch(() => undefined);
     await storage.deleteObject({ storageKey }).catch(() => undefined);
     throw error;
   }
@@ -81,10 +79,14 @@ async function recordUsageOnce(generation: Awaited<ReturnType<typeof getGenerati
 async function finishCompletedGeneration(userId: string, generationId: string, result: ProviderSubmission) {
   const generation = await getGeneration(userId, generationId);
   if (!generation) throw new Error("GENERATION_NOT_FOUND");
-  if (generation.status === "COMPLETED") return generation;
 
-  await persistProviderOutput(userId, generation, result);
-  const completed = await completeGeneration(userId, generationId);
+  const versions = await listGenerationVersions(generationId);
+  const existingOutput = versions.find((version) => Boolean(version.outputAssetId));
+  if (!existingOutput) await persistProviderOutput(userId, generation, result);
+
+  const completed = generation.status === "COMPLETED"
+    ? generation
+    : await completeGeneration(userId, generationId);
   await recordUsageOnce(completed);
   return completed;
 }
@@ -130,7 +132,10 @@ export async function pollGeneration(userId: string, generationId: string): Prom
   ensureProviderAdapters();
   const generation = await getGeneration(userId, generationId);
   if (!generation?.providerOperationId) throw new Error("PROVIDER_OPERATION_NOT_FOUND");
-  if (generation.status === "COMPLETED") return { operationId: generation.providerOperationId, status: "COMPLETED" };
+  if (generation.status === "COMPLETED") {
+    await recordUsageOnce(generation);
+    return { operationId: generation.providerOperationId, status: "COMPLETED" };
+  }
 
   const provider = (await getDb().select().from(providers).where(and(eq(providers.id, generation.providerId), eq(providers.enabled, true))).limit(1))[0];
   if (!provider || !generation.providerAccountId) throw new Error("PROVIDER_CONTEXT_NOT_FOUND");
