@@ -55,6 +55,11 @@ export async function listAssets(userId: string, filters: { projectId?: string |
   return getDb().select().from(assets).where(and(...conditions)).orderBy(desc(assets.createdAt));
 }
 
+export async function getAsset(userId: string, assetId: string) {
+  const rows = await getDb().select().from(assets).where(and(eq(assets.id, assetId), eq(assets.userId, userId), isNull(assets.deletedAt))).limit(1);
+  return rows[0] ?? null;
+}
+
 export async function createAsset(userId: string, input: CreateAssetInput) {
   const name = input.name.trim();
   const storageKey = input.storageKey.trim();
@@ -82,6 +87,28 @@ export async function createAsset(userId: string, input: CreateAssetInput) {
     metadata: input.metadata ?? {},
   }).returning();
   if (!rows[0]) throw new Error("ASSET_CREATE_FAILED");
+  return rows[0];
+}
+
+export async function completeAsset(userId: string, assetId: string, input: {
+  mimeType?: string | null;
+  byteSize?: number | null;
+  metadata?: Record<string, unknown>;
+}) {
+  const asset = await getAsset(userId, assetId);
+  if (!asset) throw new Error("ASSET_NOT_FOUND");
+
+  validateNonNegative(input.byteSize, "INVALID_BYTE_SIZE");
+  if (input.mimeType && input.mimeType.length > 255) throw new Error("INVALID_MIME_TYPE");
+
+  const rows = await getDb().update(assets).set({
+    mimeType: input.mimeType ?? asset.mimeType,
+    byteSize: input.byteSize ?? asset.byteSize,
+    metadata: input.metadata ?? asset.metadata,
+    updatedAt: new Date(),
+  }).where(and(eq(assets.id, assetId), eq(assets.userId, userId), isNull(assets.deletedAt))).returning();
+
+  if (!rows[0]) throw new Error("ASSET_UPDATE_FAILED");
   return rows[0];
 }
 
