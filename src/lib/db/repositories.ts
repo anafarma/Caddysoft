@@ -125,15 +125,34 @@ export async function listStalePendingAssets(before: Date, limit = 100) {
 
 export async function listDeletedAssets(before: Date, limit = 100) {
   return getDb().select().from(assets)
-    .where(and(isNotNull(assets.deletedAt), lt(assets.deletedAt, before)))
+    .where(and(
+      isNotNull(assets.deletedAt),
+      lt(assets.deletedAt, before),
+      sql`COALESCE(${assets.metadata}->>'storageDeletedAt', '') = ''`,
+    ))
     .orderBy(assets.deletedAt)
     .limit(limit);
 }
 
 export async function markAssetDeleted(assetId: string) {
   const rows = await getDb().update(assets)
-    .set({ deletedAt: new Date(), updatedAt: new Date() })
+    .set({
+      deletedAt: new Date(),
+      updatedAt: new Date(),
+      metadata: sql`jsonb_set(${assets.metadata}, '{uploadState}', '"DELETED"'::jsonb, true)`,
+    })
     .where(and(eq(assets.id, assetId), isNull(assets.deletedAt)))
+    .returning({ id: assets.id });
+  return Boolean(rows[0]);
+}
+
+export async function markAssetStorageDeleted(assetId: string) {
+  const rows = await getDb().update(assets)
+    .set({
+      updatedAt: new Date(),
+      metadata: sql`jsonb_set(${assets.metadata}, '{storageDeletedAt}', to_jsonb(${new Date().toISOString()}::text), true)`,
+    })
+    .where(eq(assets.id, assetId))
     .returning({ id: assets.id });
   return Boolean(rows[0]);
 }
