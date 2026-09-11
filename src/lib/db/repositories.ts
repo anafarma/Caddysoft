@@ -1,4 +1,4 @@
-import { desc, eq, and, isNull, lt, isNotNull } from "drizzle-orm";
+import { desc, eq, and, isNull, lt, isNotNull, sql } from "drizzle-orm";
 import { getDb } from "./index";
 import { assets, projects, scenes, assetKind } from "./schema";
 import type { Asset } from "./schema";
@@ -114,7 +114,11 @@ export async function completeAsset(userId: string, assetId: string, input: {
 
 export async function listStalePendingAssets(before: Date, limit = 100) {
   return getDb().select().from(assets)
-    .where(and(isNull(assets.deletedAt), lt(assets.createdAt, before)))
+    .where(and(
+      isNull(assets.deletedAt),
+      lt(assets.createdAt, before),
+      sql`COALESCE(${assets.metadata}->>'uploadState', '') = 'PENDING'`,
+    ))
     .orderBy(assets.createdAt)
     .limit(limit);
 }
