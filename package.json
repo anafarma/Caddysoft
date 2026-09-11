@@ -13,6 +13,7 @@
   "dependencies": {
     "@clerk/nextjs": "latest",
     "@vercel/analytics": "latest",
+    "@vercel/blob": "latest",
     "drizzle-orm": "latest",
     "next": "latest",
     "postgres": "latest",
