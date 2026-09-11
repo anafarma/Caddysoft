@@ -1,4 +1,4 @@
-import { del, issueSignedToken, presignUrl } from "@vercel/blob";
+import { del, issueSignedToken, presignUrl, put } from "@vercel/blob";
 
 const UPLOAD_URL_TTL_MS = 15 * 60 * 1000;
 const DOWNLOAD_URL_TTL_MS = 5 * 60 * 1000;
@@ -13,6 +13,7 @@ export type AssetStorageUpload = {
 export type AssetStorageAdapter = {
   createUploadUrl(input: AssetStorageUpload): Promise<{ uploadUrl: string; expiresAt: string }>;
   createDownloadUrl(input: { storageKey: string }): Promise<{ downloadUrl: string; expiresAt: string }>;
+  uploadStream(input: { storageKey: string; body: ReadableStream<Uint8Array> | Blob | ArrayBuffer; contentType: string }): Promise<{ byteSize?: number }>;
   deleteObject(input: { storageKey: string }): Promise<void>;
 };
 
@@ -61,6 +62,15 @@ const vercelBlobStorageAdapter: AssetStorageAdapter = {
       validForMs: DOWNLOAD_URL_TTL_MS,
     });
     return { downloadUrl: result.presignedUrl, expiresAt: result.expiresAt };
+  },
+
+  async uploadStream(input) {
+    const blob = await put(input.storageKey, input.body, {
+      access: "private",
+      addRandomSuffix: false,
+      contentType: input.contentType,
+    });
+    return { byteSize: blob.size };
   },
 
   async deleteObject(input) {
