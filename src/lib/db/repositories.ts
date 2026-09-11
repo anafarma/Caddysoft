@@ -1,4 +1,4 @@
-import { desc, eq, and, isNull } from "drizzle-orm";
+import { desc, eq, and, isNull, lt, isNotNull } from "drizzle-orm";
 import { getDb } from "./index";
 import { assets, projects, scenes, assetKind } from "./schema";
 import type { Asset } from "./schema";
@@ -110,6 +110,28 @@ export async function completeAsset(userId: string, assetId: string, input: {
 
   if (!rows[0]) throw new Error("ASSET_UPDATE_FAILED");
   return rows[0];
+}
+
+export async function listStalePendingAssets(before: Date, limit = 100) {
+  return getDb().select().from(assets)
+    .where(and(isNull(assets.deletedAt), lt(assets.createdAt, before)))
+    .orderBy(assets.createdAt)
+    .limit(limit);
+}
+
+export async function listDeletedAssets(before: Date, limit = 100) {
+  return getDb().select().from(assets)
+    .where(and(isNotNull(assets.deletedAt), lt(assets.deletedAt, before)))
+    .orderBy(assets.deletedAt)
+    .limit(limit);
+}
+
+export async function markAssetDeleted(assetId: string) {
+  const rows = await getDb().update(assets)
+    .set({ deletedAt: new Date(), updatedAt: new Date() })
+    .where(and(eq(assets.id, assetId), isNull(assets.deletedAt)))
+    .returning({ id: assets.id });
+  return Boolean(rows[0]);
 }
 
 export { ASSET_KINDS, assetKind };
