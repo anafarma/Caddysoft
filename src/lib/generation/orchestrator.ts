@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { getDb } from "@/src/lib/db";
-import { providers } from "@/src/lib/db/schema";
+import { providerAccounts, providers } from "@/src/lib/db/schema";
 import { getGeneration, markGenerationStarted, setProviderOperation, completeGeneration, failGeneration } from "./repository";
 import { selectProviderAccount } from "@/src/lib/providers/account-selector";
 import { getProviderAdapter } from "@/src/lib/providers/registry";
@@ -51,7 +51,7 @@ export async function pollGeneration(userId: string, generationId: string): Prom
   if (!provider || !generation.providerAccountId) throw new Error("PROVIDER_CONTEXT_NOT_FOUND");
   const adapter = getProviderAdapter(provider.type);
   if (!adapter) throw new Error("PROVIDER_ADAPTER_NOT_CONFIGURED");
-  const account = (await getDb().select().from(require("@/src/lib/db/schema").providerAccounts).where(eq(require("@/src/lib/db/schema").providerAccounts.id, generation.providerAccountId)).limit(1))[0];
+  const account = (await getDb().select().from(providerAccounts).where(eq(providerAccounts.id, generation.providerAccountId)).limit(1))[0];
   if (!account) throw new Error("PROVIDER_ACCOUNT_NOT_FOUND");
   const result = await adapter.poll(generation.providerOperationId, {
     id: account.id, providerId: account.providerId, status: account.status, remainingToday: account.remainingToday,
