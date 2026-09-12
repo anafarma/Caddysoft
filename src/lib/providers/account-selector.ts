@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, isNull, or } from "drizzle-orm";
+import { and, asc, eq, gt, isNull, lt, or } from "drizzle-orm";
 import { getDb } from "@/src/lib/db";
 import { providerAccounts } from "@/src/lib/db/schema";
 import type { ProviderAccountCandidate } from "./types";
@@ -8,7 +8,7 @@ export async function selectProviderAccount(userId: string, providerId: string):
   const rows = await getDb().select().from(providerAccounts).where(and(
     eq(providerAccounts.userId, userId), eq(providerAccounts.providerId, providerId), eq(providerAccounts.status, "READY"),
     or(isNull(providerAccounts.remainingToday), gt(providerAccounts.remainingToday, 0)),
-    or(isNull(providerAccounts.cooldownUntil), gt(now, providerAccounts.cooldownUntil)),
+    or(isNull(providerAccounts.cooldownUntil), lt(providerAccounts.cooldownUntil, now)),
   )).orderBy(asc(providerAccounts.usedToday), asc(providerAccounts.lastUsedAt), asc(providerAccounts.createdAt));
   for (const candidate of rows) {
     const claimed = await getDb().update(providerAccounts).set({
