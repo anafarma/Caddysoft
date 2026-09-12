@@ -37,6 +37,7 @@ async function createSignedUrl(input: {
     pathname: input.pathname,
     operation: input.operation,
     validUntil,
+    access: "private",
     ...(input.operation === "get" ? { useCache: false } : {}),
   });
 
@@ -65,12 +66,12 @@ const vercelBlobStorageAdapter: AssetStorageAdapter = {
   },
 
   async uploadStream(input) {
-    const blob = await put(input.storageKey, input.body, {
+    await put(input.storageKey, input.body, {
       access: "private",
       addRandomSuffix: false,
       contentType: input.contentType,
     });
-    return { byteSize: blob.size };
+    return { byteSize: input.body instanceof Blob || input.body instanceof ArrayBuffer ? input.body.byteLength ?? input.body.size : undefined };
   },
 
   async deleteObject(input) {
