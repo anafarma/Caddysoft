@@ -71,7 +71,10 @@ const vercelBlobStorageAdapter: AssetStorageAdapter = {
       addRandomSuffix: false,
       contentType: input.contentType,
     });
-    return { byteSize: input.body instanceof Blob || input.body instanceof ArrayBuffer ? input.body.byteLength ?? input.body.size : undefined };
+    let byteSize: number | undefined;
+    if (input.body instanceof Blob) byteSize = input.body.size;
+    else if (input.body instanceof ArrayBuffer) byteSize = input.body.byteLength;
+    return { byteSize };
   },
 
   async deleteObject(input) {
