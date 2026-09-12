@@ -41,7 +41,7 @@ export async function claimNextJob() {
     )
     RETURNING *
   `);
-  return result.rows[0] ?? null;
+  return result[0] ?? null;
 }
 
 export async function succeedJob(jobId: string) {
