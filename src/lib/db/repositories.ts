@@ -65,6 +65,7 @@ export async function createAsset(userId: string, input: CreateAssetInput) {
   const storageKey = input.storageKey.trim();
   if (!name || name.length > 200) throw new Error("INVALID_ASSET_NAME");
   if (!storageKey || storageKey.length > 1000) throw new Error("INVALID_STORAGE_KEY");
+  if (!storageKey.startsWith(`users/${userId}/`)) throw new Error("INVALID_STORAGE_KEY");
   if (!input.kind || !ASSET_KINDS.includes(input.kind)) throw new Error("INVALID_ASSET_KIND");
   if (input.mimeType && input.mimeType.length > 255) throw new Error("INVALID_MIME_TYPE");
   validateNonNegative(input.byteSize, "INVALID_BYTE_SIZE");
