@@ -1,7 +1,7 @@
 import { head } from "@vercel/blob";
 import { NextResponse } from "next/server";
 import { requireAppUser } from "@/src/lib/auth/current-app-user";
-import { completeDerivative } from "@/src/lib/assets/derivatives";
+import { completeDerivative, getAssetDerivative } from "@/src/lib/assets/derivatives";
 
 export async function POST(request: Request, context: { params: Promise<{ assetId: string; derivativeId: string }> }) {
   try {
@@ -12,11 +12,10 @@ export async function POST(request: Request, context: { params: Promise<{ assetI
       ? body.metadata
       : {};
 
-    const { getAssetDerivative } = await import("@/src/lib/assets/derivatives");
     const current = await getAssetDerivative(user.id, derivativeId);
     if (!current) return NextResponse.json({ error: "DERIVATIVE_NOT_FOUND" }, { status: 404 });
 
-    const blob = await head(current.derivative.storageKey, { access: "private" });
+    const blob = await head(current.derivative.storageKey);
     const record = await completeDerivative(user.id, derivativeId, {
       mimeType: blob.contentType || current.derivative.mimeType,
       byteSize: blob.size,
