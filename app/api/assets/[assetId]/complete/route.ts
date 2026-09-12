@@ -10,7 +10,7 @@ export async function POST(request: Request, context: { params: Promise<{ assetI
     const asset = await getAsset(user.id, assetId);
     if (!asset) return NextResponse.json({ error: "ASSET_NOT_FOUND" }, { status: 404 });
 
-    const blob = await head(asset.storageKey, { access: "private" });
+    const blob = await head(asset.storageKey);
     const body = await request.json().catch(() => null);
     const metadata = body && typeof body === "object" && body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata)
       ? body.metadata
