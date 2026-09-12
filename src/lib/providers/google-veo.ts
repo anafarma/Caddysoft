@@ -41,7 +41,7 @@ export const googleVeoAdapter: ProviderAdapter = {
   async poll(operationId: string, account: ProviderAccountCandidate): Promise<ProviderSubmission> {
     const credentials = await resolveProviderCredential(account.credentialRef);
     const key = apiKey(credentials);
-    const operationPath = operationId.startsWith("http") ? operationId : `${BASE_URL}/${operationId.replace(/^\\/+/, "")}`;
+    const operationPath = operationId.startsWith("http") ? operationId : `${BASE_URL}/${operationId.replace(/^\/+/, "")}`;
     const response = await fetch(operationPath, { headers: { "x-goog-api-key": key }, cache: "no-store" });
     const body = await parse(response);
     if (body.error) throw new Error(`GOOGLE_VEO_OPERATION_ERROR:${JSON.stringify(body.error).slice(0, 1000)}`);
