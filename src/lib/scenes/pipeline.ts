@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { getDb } from "@/src/lib/db";
-import { characters, locations, projects, scenes, styles } from "@/src/lib/db/schema";
+import { assets, characters, generationVersions, generations, locations, projects, scenes, styles } from "@/src/lib/db/schema";
 
 const MAX_TITLE_LENGTH = 200;
 const MAX_PROMPT_LENGTH = 20_000;
@@ -19,18 +19,12 @@ function validateSceneInput(input: SceneInput) {
   if (!title || title.length > MAX_TITLE_LENGTH) throw new Error("INVALID_SCENE_TITLE");
   if (input.position != null && (!Number.isSafeInteger(input.position) || input.position < 0)) throw new Error("INVALID_SCENE_POSITION");
   if (input.prompt != null && input.prompt.length > MAX_PROMPT_LENGTH) throw new Error("INVALID_SCENE_PROMPT");
-  if (input.durationSeconds != null && (!Number.isSafeInteger(input.durationSeconds) || input.durationSeconds < 1 || input.durationSeconds > 3600)) {
-    throw new Error("SCENE_DURATION_INVALID");
-  }
+  if (input.durationSeconds != null && (!Number.isSafeInteger(input.durationSeconds) || input.durationSeconds < 1 || input.durationSeconds > 3600)) throw new Error("SCENE_DURATION_INVALID");
   return title;
 }
 
 async function getOwnedActiveProject(userId: string, projectId: string) {
-  const rows = await getDb().select().from(projects).where(and(
-    eq(projects.id, projectId),
-    eq(projects.userId, userId),
-    eq(projects.status, "ACTIVE"),
-  )).limit(1);
+  const rows = await getDb().select().from(projects).where(and(eq(projects.id, projectId), eq(projects.userId, userId), eq(projects.status, "ACTIVE"))).limit(1);
   return rows[0] ?? null;
 }
 
@@ -43,42 +37,26 @@ export async function listProjectScenes(userId: string, projectId: string) {
 }
 
 export async function createScene(userId: string, projectId: string, input: SceneInput) {
-  const project = await getOwnedActiveProject(userId, projectId);
-  if (!project) throw new Error("PROJECT_NOT_FOUND");
+  if (!(await getOwnedActiveProject(userId, projectId))) throw new Error("PROJECT_NOT_FOUND");
   const title = validateSceneInput(input);
-
   let position = input.position;
   if (position == null) {
-    const rows = await getDb().select({ max: sql<number>`COALESCE(MAX(${scenes.position}), -1)` })
-      .from(scenes).where(eq(scenes.projectId, projectId));
+    const rows = await getDb().select({ max: sql<number>`COALESCE(MAX(${scenes.position}), -1)` }).from(scenes).where(eq(scenes.projectId, projectId));
     position = Number(rows[0]?.max ?? -1) + 1;
   }
-
-  const rows = await getDb().insert(scenes).values({
-    projectId,
-    title,
-    position,
-    prompt: input.prompt?.trim() || null,
-    structuredPrompt: input.structuredPrompt ?? null,
-    status: "DRAFT",
-    durationSeconds: input.durationSeconds ?? null,
-    settings: input.settings ?? {},
-  }).returning();
+  const rows = await getDb().insert(scenes).values({ projectId, title, position, prompt: input.prompt?.trim() || null, structuredPrompt: input.structuredPrompt ?? null, status: "DRAFT", durationSeconds: input.durationSeconds ?? null, settings: input.settings ?? {} }).returning();
   if (!rows[0]) throw new Error("SCENE_CREATE_FAILED");
   return rows[0];
 }
 
 export async function updateScene(userId: string, projectId: string, sceneId: string, input: Partial<SceneInput>, expectedUpdatedAt?: string) {
-  const project = await getOwnedActiveProject(userId, projectId);
-  if (!project) throw new Error("PROJECT_NOT_FOUND");
-
-  const currentRows = await getDb().select().from(scenes).where(and(eq(scenes.id, sceneId), eq(scenes.projectId, projectId))).limit(1);
-  const current = currentRows[0];
+  if (!(await getOwnedActiveProject(userId, projectId))) throw new Error("PROJECT_NOT_FOUND");
+  const current = (await getDb().select().from(scenes).where(and(eq(scenes.id, sceneId), eq(scenes.projectId, projectId))).limit(1))[0];
   if (!current) throw new Error("SCENE_NOT_FOUND");
   if (current.status === "ARCHIVED") throw new Error("SCENE_ARCHIVED");
   if (expectedUpdatedAt && current.updatedAt.toISOString() !== expectedUpdatedAt) throw new Error("SCENE_CONFLICT");
 
-  const values: Record<string, unknown> = { updatedAt: new Date() };
+  const values: Partial<typeof scenes.$inferInsert> = { updatedAt: new Date() };
   if (input.title !== undefined) values.title = validateSceneInput({ ...current, ...input, title: input.title });
   if (input.position !== undefined) {
     if (!Number.isSafeInteger(input.position) || input.position < 0) throw new Error("INVALID_SCENE_POSITION");
@@ -103,8 +81,7 @@ export async function updateScene(userId: string, projectId: string, sceneId: st
 }
 
 export async function archiveScene(userId: string, projectId: string, sceneId: string, expectedUpdatedAt?: string) {
-  const project = await getOwnedActiveProject(userId, projectId);
-  if (!project) throw new Error("PROJECT_NOT_FOUND");
+  if (!(await getOwnedActiveProject(userId, projectId))) throw new Error("PROJECT_NOT_FOUND");
   const conditions = [eq(scenes.id, sceneId), eq(scenes.projectId, projectId)];
   if (expectedUpdatedAt) conditions.push(eq(scenes.updatedAt, new Date(expectedUpdatedAt)));
   const rows = await getDb().update(scenes).set({ status: "ARCHIVED", updatedAt: new Date() }).where(and(...conditions)).returning();
@@ -121,29 +98,17 @@ export function validateSceneForGeneration(scene: typeof scenes.$inferSelect) {
 
 function compileStructuredPrompt(value: Record<string, unknown>) {
   const orderedKeys = ["subject", "action", "environment", "camera", "lighting", "style", "composition", "motion", "audio", "negativePrompt"];
-  return orderedKeys
-    .filter((key) => typeof value[key] === "string" && String(value[key]).trim())
-    .map((key) => `${key}: ${String(value[key]).trim()}`)
-    .join(". ");
+  return orderedKeys.filter(key => typeof value[key] === "string" && String(value[key]).trim()).map(key => `${key}: ${String(value[key]).trim()}`).join(". ");
 }
 
-export async function buildSceneGenerationSnapshot(
-  userId: string,
-  projectId: string,
-  sceneId: string,
-  references: { characterIds?: string[]; locationIds?: string[]; styleIds?: string[] } = {},
-) {
-  const rows = await getDb().select({ scene: scenes, project: projects }).from(scenes)
-    .innerJoin(projects, eq(scenes.projectId, projects.id))
-    .where(and(eq(scenes.id, sceneId), eq(scenes.projectId, projectId), eq(projects.userId, userId), eq(projects.status, "ACTIVE"))).limit(1);
-  const row = rows[0];
+export async function buildSceneGenerationSnapshot(userId: string, projectId: string, sceneId: string, references: { characterIds?: string[]; locationIds?: string[]; styleIds?: string[] } = {}) {
+  const row = (await getDb().select({ scene: scenes, project: projects }).from(scenes).innerJoin(projects, eq(scenes.projectId, projects.id)).where(and(eq(scenes.id, sceneId), eq(scenes.projectId, projectId), eq(projects.userId, userId), eq(projects.status, "ACTIVE"))).limit(1))[0];
   if (!row) throw new Error("SCENE_NOT_FOUND");
   validateSceneForGeneration(row.scene);
 
   const characterIds = [...new Set(references.characterIds ?? [])];
   const locationIds = [...new Set(references.locationIds ?? [])];
   const styleIds = [...new Set(references.styleIds ?? [])];
-
   const [characterRows, locationRows, styleRows] = await Promise.all([
     characterIds.length ? getDb().select().from(characters).where(and(eq(characters.userId, userId), sql`${characters.id} = ANY(${characterIds})`)) : [],
     locationIds.length ? getDb().select().from(locations).where(and(eq(locations.userId, userId), sql`${locations.id} = ANY(${locationIds})`)) : [],
@@ -158,25 +123,41 @@ export async function buildSceneGenerationSnapshot(
   for (const style of styleRows) compiledParts.push(`Style ${style.name}: ${style.promptPreset}`);
 
   return {
-    projectId: row.project.id,
-    sceneId: row.scene.id,
-    title: row.scene.title,
-    prompt: compiledParts.filter(Boolean).join("\n\n"),
-    structuredPrompt,
-    durationSeconds: row.scene.durationSeconds,
-    settings: row.scene.settings,
-    references: {
-      characters: characterRows.map(item => item.id),
-      locations: locationRows.map(item => item.id),
-      styles: styleRows.map(item => item.id),
-    },
+    projectId: row.project.id, sceneId: row.scene.id, title: row.scene.title,
+    prompt: compiledParts.filter(Boolean).join("\n\n"), structuredPrompt,
+    durationSeconds: row.scene.durationSeconds, settings: row.scene.settings,
+    references: { characters: characterRows.map(item => item.id), locations: locationRows.map(item => item.id), styles: styleRows.map(item => item.id) },
     plannedAt: new Date().toISOString(),
   };
 }
 
 export async function buildProjectGenerationPlan(userId: string, projectId: string) {
-  const project = await getOwnedActiveProject(userId, projectId);
-  if (!project) throw new Error("PROJECT_NOT_FOUND");
+  if (!(await getOwnedActiveProject(userId, projectId))) throw new Error("PROJECT_NOT_FOUND");
   const sceneList = await listProjectScenes(userId, projectId);
   return Promise.all(sceneList.filter(scene => scene.status !== "ARCHIVED").map(scene => buildSceneGenerationSnapshot(userId, projectId, scene.id)));
+}
+
+export async function buildProjectRenderManifest(userId: string, projectId: string) {
+  if (!(await getOwnedActiveProject(userId, projectId))) throw new Error("PROJECT_NOT_FOUND");
+  const sceneList = await listProjectScenes(userId, projectId);
+  const generationRows = await getDb().select({ generation: generations, version: generationVersions, asset: assets })
+    .from(generations)
+    .innerJoin(generationVersions, and(eq(generationVersions.generationId, generations.id), sql`${generationVersions.outputAssetId} IS NOT NULL`))
+    .innerJoin(assets, and(eq(assets.id, generationVersions.outputAssetId!), eq(assets.userId, userId), sql`${assets.deletedAt} IS NULL`))
+    .where(and(eq(generations.projectId, projectId), eq(generations.userId, userId), eq(generations.status, "COMPLETED")))
+    .orderBy(desc(generations.createdAt), desc(generationVersions.versionNumber));
+
+  const latestByScene = new Map<string, typeof generationRows[number]>();
+  for (const row of generationRows) if (row.generation.sceneId && !latestByScene.has(row.generation.sceneId)) latestByScene.set(row.generation.sceneId, row);
+
+  let cursorSeconds = 0;
+  const clips = sceneList.filter(scene => scene.status !== "ARCHIVED").map(scene => {
+    const row = latestByScene.get(scene.id);
+    const durationSeconds = scene.durationSeconds ?? 0;
+    const clip = { sceneId: scene.id, position: scene.position, title: scene.title, assetId: row?.asset.id ?? null, generationId: row?.generation.id ?? null, durationSeconds, startSeconds: cursorSeconds, endSeconds: cursorSeconds + durationSeconds, ready: Boolean(row) };
+    cursorSeconds += durationSeconds;
+    return clip;
+  });
+
+  return { projectId, version: 1, generatedAt: new Date().toISOString(), durationSeconds: cursorSeconds, ready: clips.every(clip => clip.ready), clips };
 }
