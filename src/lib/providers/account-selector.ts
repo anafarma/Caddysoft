@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, isNull, lt, or } from "drizzle-orm";
+import { and, asc, eq, gt, isNull, lt, or, sql } from "drizzle-orm";
 import { getDb } from "@/src/lib/db";
 import { providerAccounts } from "@/src/lib/db/schema";
 import type { ProviderAccountCandidate } from "./types";
@@ -6,20 +6,43 @@ import type { ProviderAccountCandidate } from "./types";
 export async function selectProviderAccount(userId: string, providerId: string): Promise<ProviderAccountCandidate | null> {
   const now = new Date();
   const rows = await getDb().select().from(providerAccounts).where(and(
-    eq(providerAccounts.userId, userId), eq(providerAccounts.providerId, providerId), eq(providerAccounts.status, "READY"),
+    eq(providerAccounts.userId, userId),
+    eq(providerAccounts.providerId, providerId),
+    eq(providerAccounts.status, "READY"),
     or(isNull(providerAccounts.remainingToday), gt(providerAccounts.remainingToday, 0)),
     or(isNull(providerAccounts.cooldownUntil), lt(providerAccounts.cooldownUntil, now)),
   )).orderBy(asc(providerAccounts.usedToday), asc(providerAccounts.lastUsedAt), asc(providerAccounts.createdAt));
+
   for (const candidate of rows) {
     const claimed = await getDb().update(providerAccounts).set({
-      status: "BUSY", usedToday: candidate.usedToday + 1, lastUsedAt: now,
-      firstGenerationAt: candidate.firstGenerationAt ?? now, updatedAt: now,
-    }).where(and(eq(providerAccounts.id, candidate.id), eq(providerAccounts.status, "READY"))).returning();
-    if (claimed[0]) return {
-      id: candidate.id, providerId: candidate.providerId, status: "BUSY",
-      remainingToday: candidate.remainingToday == null ? null : Math.max(0, candidate.remainingToday - 1),
-      cooldownUntil: null, lastUsedAt: now, credentialRef: candidate.credentialRef, metadata: candidate.metadata,
-    };
+      status: "BUSY",
+      usedToday: sql`${providerAccounts.usedToday} + 1`,
+      remainingToday: candidate.remainingToday == null
+        ? null
+        : sql`GREATEST(0, ${providerAccounts.remainingToday} - 1)`,
+      lastUsedAt: now,
+      firstGenerationAt: candidate.firstGenerationAt ?? now,
+      updatedAt: now,
+    }).where(and(
+      eq(providerAccounts.id, candidate.id),
+      eq(providerAccounts.status, "READY"),
+      or(isNull(providerAccounts.remainingToday), gt(providerAccounts.remainingToday, 0)),
+      or(isNull(providerAccounts.cooldownUntil), lt(providerAccounts.cooldownUntil, now)),
+    )).returning();
+
+    if (claimed[0]) {
+      const account = claimed[0];
+      return {
+        id: account.id,
+        providerId: account.providerId,
+        status: "BUSY",
+        remainingToday: account.remainingToday,
+        cooldownUntil: account.cooldownUntil,
+        lastUsedAt: account.lastUsedAt,
+        credentialRef: account.credentialRef,
+        metadata: account.metadata,
+      };
+    }
   }
   return null;
 }
