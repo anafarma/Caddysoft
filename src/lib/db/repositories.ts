@@ -163,7 +163,7 @@ export async function markAssetDeleted(assetId: string) {
     .set({
       deletedAt: new Date(),
       updatedAt: new Date(),
-      metadata: sql`jsonb_set(${assets.metadata}, '{uploadState}', '\"DELETED\"'::jsonb, true)`,
+      metadata: sql`jsonb_set(${assets.metadata}, '{uploadState}', '"DELETED"'::jsonb, true)`,
     })
     .where(and(eq(assets.id, assetId), isNull(assets.deletedAt)))
     .returning({ id: assets.id });
