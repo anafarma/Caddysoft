@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { getDb } from "@/src/lib/db";
 import { assets, characters, generationVersions, generations, locations, projects, scenes, styles } from "@/src/lib/db/schema";
 
@@ -122,13 +122,7 @@ export async function buildSceneGenerationSnapshot(userId: string, projectId: st
   for (const location of locationRows) compiledParts.push(`Location ${location.name}: ${[location.description, location.visualDetails].filter(Boolean).join("; ")}`);
   for (const style of styleRows) compiledParts.push(`Style ${style.name}: ${style.promptPreset}`);
 
-  return {
-    projectId: row.project.id, sceneId: row.scene.id, title: row.scene.title,
-    prompt: compiledParts.filter(Boolean).join("\n\n"), structuredPrompt,
-    durationSeconds: row.scene.durationSeconds, settings: row.scene.settings,
-    references: { characters: characterRows.map(item => item.id), locations: locationRows.map(item => item.id), styles: styleRows.map(item => item.id) },
-    plannedAt: new Date().toISOString(),
-  };
+  return { projectId: row.project.id, sceneId: row.scene.id, title: row.scene.title, prompt: compiledParts.filter(Boolean).join("\n\n"), structuredPrompt, durationSeconds: row.scene.durationSeconds, settings: row.scene.settings, references: { characters: characterRows.map(item => item.id), locations: locationRows.map(item => item.id), styles: styleRows.map(item => item.id) }, plannedAt: new Date().toISOString() };
 }
 
 export async function buildProjectGenerationPlan(userId: string, projectId: string) {
@@ -142,7 +136,7 @@ export async function buildProjectRenderManifest(userId: string, projectId: stri
   const sceneList = await listProjectScenes(userId, projectId);
   const generationRows = await getDb().select({ generation: generations, version: generationVersions, asset: assets })
     .from(generations)
-    .innerJoin(generationVersions, and(eq(generationVersions.generationId, generations.id), isNull(generationVersions.outputAssetId)))
+    .innerJoin(generationVersions, and(eq(generationVersions.generationId, generations.id), isNotNull(generationVersions.outputAssetId)))
     .innerJoin(assets, and(eq(assets.id, generationVersions.outputAssetId!), eq(assets.userId, userId), isNull(assets.deletedAt)))
     .where(and(eq(generations.projectId, projectId), eq(generations.userId, userId), eq(generations.status, "COMPLETED")))
     .orderBy(desc(generations.createdAt), desc(generationVersions.versionNumber));
@@ -158,6 +152,5 @@ export async function buildProjectRenderManifest(userId: string, projectId: stri
     cursorSeconds += durationSeconds;
     return clip;
   });
-
   return { projectId, version: 1, generatedAt: new Date().toISOString(), durationSeconds: cursorSeconds, ready: clips.every(clip => clip.ready), clips };
 }
