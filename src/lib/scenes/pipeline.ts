@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { getDb } from "@/src/lib/db";
 import { assets, characters, generationVersions, generations, locations, projects, scenes, styles } from "@/src/lib/db/schema";
 
@@ -110,9 +110,9 @@ export async function buildSceneGenerationSnapshot(userId: string, projectId: st
   const locationIds = [...new Set(references.locationIds ?? [])];
   const styleIds = [...new Set(references.styleIds ?? [])];
   const [characterRows, locationRows, styleRows] = await Promise.all([
-    characterIds.length ? getDb().select().from(characters).where(and(eq(characters.userId, userId), sql`${characters.id} = ANY(${characterIds})`)) : [],
-    locationIds.length ? getDb().select().from(locations).where(and(eq(locations.userId, userId), sql`${locations.id} = ANY(${locationIds})`)) : [],
-    styleIds.length ? getDb().select().from(styles).where(and(sql`(${styles.userId} = ${userId} OR ${styles.userId} IS NULL)`, sql`${styles.id} = ANY(${styleIds})`)) : [],
+    characterIds.length ? getDb().select().from(characters).where(and(eq(characters.userId, userId), inArray(characters.id, characterIds))) : [],
+    locationIds.length ? getDb().select().from(locations).where(and(eq(locations.userId, userId), inArray(locations.id, locationIds))) : [],
+    styleIds.length ? getDb().select().from(styles).where(and(inArray(styles.id, styleIds), sql`(${styles.userId} = ${userId} OR ${styles.userId} IS NULL)`)) : [],
   ]);
   if (characterRows.length !== characterIds.length || locationRows.length !== locationIds.length || styleRows.length !== styleIds.length) throw new Error("SCENE_REFERENCE_NOT_FOUND");
 
@@ -142,8 +142,8 @@ export async function buildProjectRenderManifest(userId: string, projectId: stri
   const sceneList = await listProjectScenes(userId, projectId);
   const generationRows = await getDb().select({ generation: generations, version: generationVersions, asset: assets })
     .from(generations)
-    .innerJoin(generationVersions, and(eq(generationVersions.generationId, generations.id), sql`${generationVersions.outputAssetId} IS NOT NULL`))
-    .innerJoin(assets, and(eq(assets.id, generationVersions.outputAssetId!), eq(assets.userId, userId), sql`${assets.deletedAt} IS NULL`))
+    .innerJoin(generationVersions, and(eq(generationVersions.generationId, generations.id), isNull(generationVersions.outputAssetId)))
+    .innerJoin(assets, and(eq(assets.id, generationVersions.outputAssetId!), eq(assets.userId, userId), isNull(assets.deletedAt)))
     .where(and(eq(generations.projectId, projectId), eq(generations.userId, userId), eq(generations.status, "COMPLETED")))
     .orderBy(desc(generations.createdAt), desc(generationVersions.versionNumber));
 
