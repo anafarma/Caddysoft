@@ -7,7 +7,7 @@ import { selectProviderAccount } from "@/src/lib/providers/account-selector";
 import { getProviderAdapter } from "@/src/lib/providers/registry";
 import { ensureProviderAdapters } from "@/src/lib/providers/bootstrap";
 import { classifyProviderError } from "@/src/lib/providers/errors";
-import { markAccountReady, markAccountCooldown, markAccountExhausted } from "@/src/lib/providers/account-state";
+import { releaseAccountClaim, markAccountReady, markAccountCooldown, markAccountExhausted } from "@/src/lib/providers/account-state";
 import { getAssetStorageAdapter } from "@/src/lib/assets/storage";
 import type { ProviderSubmission } from "@/src/lib/providers/types";
 
@@ -60,9 +60,6 @@ async function persistProviderOutput(userId: string, generation: Awaited<ReturnT
 
 async function recordUsageOnce(generation: Awaited<ReturnType<typeof getGeneration>>) {
   if (!generation) return;
-  const existing = await getDb().select({ id: usageEvents.id }).from(usageEvents)
-    .where(eq(usageEvents.generationId, generation.id)).limit(1);
-  if (existing[0]) return;
 
   await getDb().insert(usageEvents).values({
     userId: generation.userId,
@@ -73,7 +70,7 @@ async function recordUsageOnce(generation: Awaited<ReturnType<typeof getGenerati
     cost: generation.actualCost ?? generation.estimatedCost ?? null,
     status: "COMPLETED",
     metadata: { providerId: generation.providerId },
-  });
+  }).onConflictDoNothing({ target: usageEvents.generationId });
 }
 
 async function finishCompletedGeneration(userId: string, generationId: string, result: ProviderSubmission) {
@@ -101,12 +98,12 @@ export async function executeGeneration(userId: string, generationId: string) {
   if (!account) throw new Error("NO_PROVIDER_ACCOUNT_AVAILABLE");
   const adapter = getProviderAdapter(provider.type);
   if (!adapter) {
-    await markAccountReady(account.id, account.remainingToday);
+    await releaseAccountClaim(account.id);
     throw new Error("PROVIDER_ADAPTER_NOT_CONFIGURED");
   }
   const started = await markGenerationStarted(userId, generationId, account.id);
   if (!started) {
-    await markAccountReady(account.id, account.remainingToday);
+    await releaseAccountClaim(account.id);
     return getGeneration(userId, generationId);
   }
   try {
@@ -114,7 +111,7 @@ export async function executeGeneration(userId: string, generationId: string) {
     await setProviderOperation(userId, generationId, result.operationId);
     if (result.status === "COMPLETED") {
       await finishCompletedGeneration(userId, generationId, result);
-      await markAccountReady(account.id, account.remainingToday);
+      await markAccountReady(account.id);
     }
     return getGeneration(userId, generationId);
   } catch (error) {
@@ -122,7 +119,7 @@ export async function executeGeneration(userId: string, generationId: string) {
     if (failure.class === "EXHAUSTED") await markAccountExhausted(account.id);
     else if (failure.class === "COOLDOWN" || failure.class === "RETRYABLE") await markAccountCooldown(account.id, failure.code, failure.message);
     else if (failure.class === "AUTH") await markAccountCooldown(account.id, failure.code, failure.message, 15 * 60_000);
-    else await markAccountReady(account.id, account.remainingToday);
+    else await markAccountReady(account.id);
     await failGeneration(userId, generationId, failure.code, failure.message);
     throw error;
   }
@@ -149,7 +146,7 @@ export async function pollGeneration(userId: string, generationId: string): Prom
   });
   if (result.status === "COMPLETED") {
     await finishCompletedGeneration(userId, generationId, result);
-    await markAccountReady(account.id, account.remainingToday);
+    await markAccountReady(account.id);
   } else if (result.status === "FAILED") {
     await markAccountCooldown(account.id, "PROVIDER_OPERATION_FAILED", "Provider operation failed");
     await failGeneration(userId, generationId, "PROVIDER_OPERATION_FAILED", "Provider operation failed");
