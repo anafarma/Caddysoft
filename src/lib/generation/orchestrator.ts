@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { getDb } from "@/src/lib/db";
-import { generations, providerAccounts, providers, usageEvents } from "@/src/lib/db/schema";
-import { createAsset, markAssetDeleted } from "@/src/lib/db/repositories";
+import { assets, generations, providerAccounts, providers, usageEvents } from "@/src/lib/db/schema";
+import { createAsset, getAssetByStorageKey, restoreAssetForOutput } from "@/src/lib/db/repositories";
 import { getGeneration, markGenerationStarted, setProviderOperation, completeGeneration, failGeneration, createGenerationVersion, listGenerationVersions } from "./repository";
 import { selectProviderAccount } from "@/src/lib/providers/account-selector";
 import { getProviderAdapter } from "@/src/lib/providers/registry";
@@ -16,46 +16,61 @@ async function persistProviderOutput(userId: string, generation: Awaited<ReturnT
 
   const storageKey = `users/${userId}/projects/${generation.projectId}/generations/${generation.id}/output.mp4`;
   const storage = getAssetStorageAdapter();
-  let assetId: string | null = null;
+  const uploaded = await storage.uploadStream({
+    storageKey,
+    body: result.output.body,
+    contentType: result.output.mimeType,
+  });
 
-  try {
-    const uploaded = await storage.uploadStream({
-      storageKey,
-      body: result.output.body,
-      contentType: result.output.mimeType,
-    });
+  const metadata = {
+    generationId: generation.id,
+    providerId: generation.providerId,
+    providerOperationId: generation.providerOperationId,
+    ...(result.output.metadata ?? {}),
+    uploadState: "COMPLETE",
+  };
 
-    const asset = await createAsset(userId, {
-      projectId: generation.projectId,
-      kind: "VIDEO",
-      name: result.output.filename || `${generation.id}.mp4`,
-      storageKey,
+  let asset = await getAssetByStorageKey(userId, storageKey);
+  if (asset?.deletedAt) {
+    asset = await restoreAssetForOutput(userId, asset.id, {
       mimeType: result.output.mimeType,
       byteSize: uploaded.byteSize ?? result.output.byteSize ?? null,
-      metadata: {
-        generationId: generation.id,
-        providerId: generation.providerId,
-        providerOperationId: generation.providerOperationId,
-        ...(result.output.metadata ?? {}),
-        uploadState: "COMPLETE",
-      },
+      metadata,
     });
-    assetId = asset.id;
-
-    const version = await createGenerationVersion(
-      generation.id,
-      { model: generation.model, prompt: generation.promptSnapshot, config: generation.requestConfig },
-      result.raw,
-      asset.id,
-    );
-    if (!version) throw new Error("GENERATION_VERSION_CREATE_FAILED");
-
-    return asset;
-  } catch (error) {
-    if (assetId) await markAssetDeleted(assetId).catch(() => undefined);
-    await storage.deleteObject({ storageKey }).catch(() => undefined);
-    throw error;
   }
+
+  if (!asset) {
+    try {
+      asset = await createAsset(userId, {
+        projectId: generation.projectId,
+        kind: "VIDEO",
+        name: result.output.filename || `${generation.id}.mp4`,
+        storageKey,
+        mimeType: result.output.mimeType,
+        byteSize: uploaded.byteSize ?? result.output.byteSize ?? null,
+        metadata,
+      });
+    } catch (error) {
+      // A concurrent completion may have created the same deterministic asset first.
+      asset = await getAssetByStorageKey(userId, storageKey);
+      if (!asset) throw error;
+    }
+  }
+
+  const version = await createGenerationVersion(
+    generation.id,
+    { model: generation.model, prompt: generation.promptSnapshot, config: generation.requestConfig },
+    result.raw,
+    asset.id,
+  );
+  if (!version) throw new Error("GENERATION_VERSION_CREATE_FAILED");
+
+  const canonicalAssetId = version.outputAssetId ?? asset.id;
+  if (canonicalAssetId !== asset.id) {
+    const canonical = await getDb().select().from(assets).where(eq(assets.id, canonicalAssetId)).limit(1);
+    if (canonical[0]) return canonical[0];
+  }
+  return asset;
 }
 
 async function recordUsageOnce(generation: Awaited<ReturnType<typeof getGeneration>>) {
@@ -84,14 +99,22 @@ async function finishCompletedGeneration(userId: string, generationId: string, r
   const completed = generation.status === "COMPLETED"
     ? generation
     : await completeGeneration(userId, generationId);
-  await recordUsageOnce(completed);
-  return completed;
+  const canonical = completed ?? await getGeneration(userId, generationId);
+  if (!canonical) throw new Error("GENERATION_COMPLETION_LOST");
+  await recordUsageOnce(canonical);
+  return canonical;
 }
 
 export async function executeGeneration(userId: string, generationId: string) {
   ensureProviderAdapters();
   const generation = await getGeneration(userId, generationId);
   if (!generation) throw new Error("GENERATION_NOT_FOUND");
+  if (generation.status === "COMPLETED") {
+    await recordUsageOnce(generation);
+    return generation;
+  }
+  if (generation.status !== "QUEUED") throw new Error("GENERATION_NOT_EXECUTABLE");
+
   const provider = (await getDb().select().from(providers).where(and(eq(providers.id, generation.providerId), eq(providers.enabled, true))).limit(1))[0];
   if (!provider) throw new Error("PROVIDER_NOT_AVAILABLE");
   const account = await selectProviderAccount(userId, provider.id);
