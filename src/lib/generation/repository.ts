@@ -1,6 +1,41 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import { getDb } from "@/src/lib/db";
-import { generations, generationVersions } from "@/src/lib/db/schema";
+import { generations, generationVersions, projects, providers } from "@/src/lib/db/schema";
+
+export async function createQueuedGeneration(userId: string, input: {
+  projectId: string;
+  sceneId: string;
+  providerId: string;
+  model: string;
+  promptSnapshot: string;
+  requestConfig: Record<string, unknown>;
+}) {
+  const project = (await getDb().select().from(projects).where(and(
+    eq(projects.id, input.projectId),
+    eq(projects.userId, userId),
+    eq(projects.status, "ACTIVE"),
+  )).limit(1))[0];
+  if (!project) throw new Error("PROJECT_NOT_FOUND");
+
+  const provider = (await getDb().select().from(providers).where(and(
+    eq(providers.id, input.providerId),
+    eq(providers.enabled, true),
+  )).limit(1))[0];
+  if (!provider) throw new Error("PROVIDER_NOT_AVAILABLE");
+
+  const rows = await getDb().insert(generations).values({
+    userId,
+    projectId: input.projectId,
+    sceneId: input.sceneId,
+    providerId: input.providerId,
+    model: input.model.trim(),
+    status: "QUEUED",
+    promptSnapshot: input.promptSnapshot,
+    requestConfig: input.requestConfig,
+  }).returning();
+  if (!rows[0]) throw new Error("GENERATION_CREATE_FAILED");
+  return rows[0];
+}
 
 export async function getGeneration(userId: string, generationId: string) {
   const rows = await getDb().select().from(generations).where(and(eq(generations.id, generationId), eq(generations.userId, userId))).limit(1);
