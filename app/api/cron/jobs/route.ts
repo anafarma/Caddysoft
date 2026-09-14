@@ -22,7 +22,7 @@ export async function GET(request: Request) {
       if (generation?.status === "GENERATING") {
         await enqueueJob(job.userId as string, {
           type: "GENERATION_POLL",
-          idempotencyKey: `${generationId}:poll:${Math.floor(Date.now() / 300000)}`,
+          idempotencyKey: `${generationId}:poll:${Math.floor(Date.now() / 300000) + 1}`,
           payload: { generationId },
           projectId: job.projectId as string | null,
           generationId,
@@ -35,7 +35,7 @@ export async function GET(request: Request) {
       if (result.status === "RUNNING") {
         await enqueueJob(job.userId as string, {
           type: "GENERATION_POLL",
-          idempotencyKey: `${generationId}:poll:${Math.floor(Date.now() / 300000)}`,
+          idempotencyKey: `${generationId}:poll:${Math.floor(Date.now() / 300000) + 1}`,
           payload: { generationId },
           projectId: job.projectId as string | null,
           generationId,
