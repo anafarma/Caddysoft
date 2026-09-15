@@ -232,7 +232,7 @@ export const usageEvents = pgTable("usage_events", {
   status: text("status").notNull(),
   occurredAt: timestamp("occurred_at", { withTimezone: true }).defaultNow().notNull(),
   metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}).notNull(),
-}, (t) => [index("usage_events_user_occurred_idx").on(t.userId, t.occurredAt), index("usage_events_account_occurred_idx").on(t.providerAccountId, t.occurredAt), index("usage_events_generation_idx").on(t.generationId)]);
+}, (t) => [uniqueIndex("usage_events_generation_unique_idx").on(t.generationId), index("usage_events_user_occurred_idx").on(t.userId, t.occurredAt), index("usage_events_account_occurred_idx").on(t.providerAccountId, t.occurredAt), index("usage_events_generation_idx").on(t.generationId)]);
 
 export type User = typeof users.$inferSelect;
 export type Project = typeof projects.$inferSelect;

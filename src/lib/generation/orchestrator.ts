@@ -1,13 +1,13 @@
 import { and, eq } from "drizzle-orm";
 import { getDb } from "@/src/lib/db";
-import { generations, providerAccounts, providers, usageEvents } from "@/src/lib/db/schema";
-import { createAsset, markAssetDeleted } from "@/src/lib/db/repositories";
+import { assets, generations, providerAccounts, providers, usageEvents } from "@/src/lib/db/schema";
+import { createAsset, getAssetByStorageKey, restoreAssetForOutput } from "@/src/lib/db/repositories";
 import { getGeneration, markGenerationStarted, setProviderOperation, completeGeneration, failGeneration, createGenerationVersion, listGenerationVersions } from "./repository";
 import { selectProviderAccount } from "@/src/lib/providers/account-selector";
 import { getProviderAdapter } from "@/src/lib/providers/registry";
 import { ensureProviderAdapters } from "@/src/lib/providers/bootstrap";
 import { classifyProviderError } from "@/src/lib/providers/errors";
-import { markAccountReady, markAccountCooldown, markAccountExhausted } from "@/src/lib/providers/account-state";
+import { releaseAccountClaim, markAccountReady, markAccountCooldown, markAccountExhausted } from "@/src/lib/providers/account-state";
 import { getAssetStorageAdapter } from "@/src/lib/assets/storage";
 import type { ProviderSubmission } from "@/src/lib/providers/types";
 
@@ -16,53 +16,65 @@ async function persistProviderOutput(userId: string, generation: Awaited<ReturnT
 
   const storageKey = `users/${userId}/projects/${generation.projectId}/generations/${generation.id}/output.mp4`;
   const storage = getAssetStorageAdapter();
-  let assetId: string | null = null;
+  const uploaded = await storage.uploadStream({
+    storageKey,
+    body: result.output.body,
+    contentType: result.output.mimeType,
+  });
 
-  try {
-    const uploaded = await storage.uploadStream({
-      storageKey,
-      body: result.output.body,
-      contentType: result.output.mimeType,
-    });
+  const metadata = {
+    generationId: generation.id,
+    providerId: generation.providerId,
+    providerOperationId: generation.providerOperationId,
+    ...(result.output.metadata ?? {}),
+    uploadState: "COMPLETE",
+  };
 
-    const asset = await createAsset(userId, {
-      projectId: generation.projectId,
-      kind: "VIDEO",
-      name: result.output.filename || `${generation.id}.mp4`,
-      storageKey,
+  let asset = await getAssetByStorageKey(userId, storageKey);
+  if (asset?.deletedAt) {
+    asset = await restoreAssetForOutput(userId, asset.id, {
       mimeType: result.output.mimeType,
       byteSize: uploaded.byteSize ?? result.output.byteSize ?? null,
-      metadata: {
-        generationId: generation.id,
-        providerId: generation.providerId,
-        providerOperationId: generation.providerOperationId,
-        ...(result.output.metadata ?? {}),
-        uploadState: "COMPLETE",
-      },
+      metadata,
     });
-    assetId = asset.id;
-
-    const version = await createGenerationVersion(
-      generation.id,
-      { model: generation.model, prompt: generation.promptSnapshot, config: generation.requestConfig },
-      result.raw,
-      asset.id,
-    );
-    if (!version) throw new Error("GENERATION_VERSION_CREATE_FAILED");
-
-    return asset;
-  } catch (error) {
-    if (assetId) await markAssetDeleted(assetId).catch(() => undefined);
-    await storage.deleteObject({ storageKey }).catch(() => undefined);
-    throw error;
   }
+
+  if (!asset) {
+    try {
+      asset = await createAsset(userId, {
+        projectId: generation.projectId,
+        kind: "VIDEO",
+        name: result.output.filename || `${generation.id}.mp4`,
+        storageKey,
+        mimeType: result.output.mimeType,
+        byteSize: uploaded.byteSize ?? result.output.byteSize ?? null,
+        metadata,
+      });
+    } catch (error) {
+      // A concurrent completion may have created the same deterministic asset first.
+      asset = await getAssetByStorageKey(userId, storageKey);
+      if (!asset) throw error;
+    }
+  }
+
+  const version = await createGenerationVersion(
+    generation.id,
+    { model: generation.model, prompt: generation.promptSnapshot, config: generation.requestConfig },
+    result.raw,
+    asset.id,
+  );
+  if (!version) throw new Error("GENERATION_VERSION_CREATE_FAILED");
+
+  const canonicalAssetId = version.outputAssetId ?? asset.id;
+  if (canonicalAssetId !== asset.id) {
+    const canonical = await getDb().select().from(assets).where(eq(assets.id, canonicalAssetId)).limit(1);
+    if (canonical[0]) return canonical[0];
+  }
+  return asset;
 }
 
 async function recordUsageOnce(generation: Awaited<ReturnType<typeof getGeneration>>) {
   if (!generation) return;
-  const existing = await getDb().select({ id: usageEvents.id }).from(usageEvents)
-    .where(eq(usageEvents.generationId, generation.id)).limit(1);
-  if (existing[0]) return;
 
   await getDb().insert(usageEvents).values({
     userId: generation.userId,
@@ -73,7 +85,7 @@ async function recordUsageOnce(generation: Awaited<ReturnType<typeof getGenerati
     cost: generation.actualCost ?? generation.estimatedCost ?? null,
     status: "COMPLETED",
     metadata: { providerId: generation.providerId },
-  });
+  }).onConflictDoNothing({ target: usageEvents.generationId });
 }
 
 async function finishCompletedGeneration(userId: string, generationId: string, result: ProviderSubmission) {
@@ -87,26 +99,34 @@ async function finishCompletedGeneration(userId: string, generationId: string, r
   const completed = generation.status === "COMPLETED"
     ? generation
     : await completeGeneration(userId, generationId);
-  await recordUsageOnce(completed);
-  return completed;
+  const canonical = completed ?? await getGeneration(userId, generationId);
+  if (!canonical) throw new Error("GENERATION_COMPLETION_LOST");
+  await recordUsageOnce(canonical);
+  return canonical;
 }
 
 export async function executeGeneration(userId: string, generationId: string) {
   ensureProviderAdapters();
   const generation = await getGeneration(userId, generationId);
   if (!generation) throw new Error("GENERATION_NOT_FOUND");
+  if (generation.status === "COMPLETED") {
+    await recordUsageOnce(generation);
+    return generation;
+  }
+  if (generation.status !== "QUEUED") throw new Error("GENERATION_NOT_EXECUTABLE");
+
   const provider = (await getDb().select().from(providers).where(and(eq(providers.id, generation.providerId), eq(providers.enabled, true))).limit(1))[0];
   if (!provider) throw new Error("PROVIDER_NOT_AVAILABLE");
   const account = await selectProviderAccount(userId, provider.id);
   if (!account) throw new Error("NO_PROVIDER_ACCOUNT_AVAILABLE");
   const adapter = getProviderAdapter(provider.type);
   if (!adapter) {
-    await markAccountReady(account.id, account.remainingToday);
+    await releaseAccountClaim(account.id);
     throw new Error("PROVIDER_ADAPTER_NOT_CONFIGURED");
   }
   const started = await markGenerationStarted(userId, generationId, account.id);
   if (!started) {
-    await markAccountReady(account.id, account.remainingToday);
+    await releaseAccountClaim(account.id);
     return getGeneration(userId, generationId);
   }
   try {
@@ -114,7 +134,7 @@ export async function executeGeneration(userId: string, generationId: string) {
     await setProviderOperation(userId, generationId, result.operationId);
     if (result.status === "COMPLETED") {
       await finishCompletedGeneration(userId, generationId, result);
-      await markAccountReady(account.id, account.remainingToday);
+      await markAccountReady(account.id);
     }
     return getGeneration(userId, generationId);
   } catch (error) {
@@ -122,7 +142,7 @@ export async function executeGeneration(userId: string, generationId: string) {
     if (failure.class === "EXHAUSTED") await markAccountExhausted(account.id);
     else if (failure.class === "COOLDOWN" || failure.class === "RETRYABLE") await markAccountCooldown(account.id, failure.code, failure.message);
     else if (failure.class === "AUTH") await markAccountCooldown(account.id, failure.code, failure.message, 15 * 60_000);
-    else await markAccountReady(account.id, account.remainingToday);
+    else await markAccountReady(account.id);
     await failGeneration(userId, generationId, failure.code, failure.message);
     throw error;
   }
@@ -149,7 +169,7 @@ export async function pollGeneration(userId: string, generationId: string): Prom
   });
   if (result.status === "COMPLETED") {
     await finishCompletedGeneration(userId, generationId, result);
-    await markAccountReady(account.id, account.remainingToday);
+    await markAccountReady(account.id);
   } else if (result.status === "FAILED") {
     await markAccountCooldown(account.id, "PROVIDER_OPERATION_FAILED", "Provider operation failed");
     await failGeneration(userId, generationId, "PROVIDER_OPERATION_FAILED", "Provider operation failed");

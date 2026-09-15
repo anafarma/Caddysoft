@@ -16,11 +16,28 @@ export async function markAccountUsed(accountId: string) {
   return rows[0] ?? null;
 }
 
-export async function markAccountReady(accountId: string, remainingToday?: number | null) {
-  await getDb().update(providerAccounts).set({
-    status: "READY", remainingToday: remainingToday ?? null, cooldownUntil: null,
+export async function releaseAccountClaim(accountId: string) {
+  const rows = await getDb().update(providerAccounts).set({
+    status: "READY",
+    usedToday: sql`GREATEST(0, ${providerAccounts.usedToday} - 1)`,
+    remainingToday: sql`CASE WHEN ${providerAccounts.remainingToday} IS NULL THEN NULL ELSE ${providerAccounts.remainingToday} + 1 END`,
+    cooldownUntil: null,
+    lastErrorCode: null,
+    lastErrorMessage: null,
+    updatedAt: new Date(),
+  }).where(and(
+    eq(providerAccounts.id, accountId),
+    eq(providerAccounts.status, "BUSY"),
+  )).returning();
+  return rows[0] ?? null;
+}
+
+export async function markAccountReady(accountId: string) {
+  const rows = await getDb().update(providerAccounts).set({
+    status: "READY", cooldownUntil: null,
     lastErrorCode: null, lastErrorMessage: null, updatedAt: new Date(),
-  }).where(eq(providerAccounts.id, accountId));
+  }).where(eq(providerAccounts.id, accountId)).returning();
+  return rows[0] ?? null;
 }
 
 export async function markAccountCooldown(accountId: string, errorCode: string, message: string, cooldownMs = 60_000) {

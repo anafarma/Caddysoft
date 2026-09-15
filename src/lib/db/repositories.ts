@@ -60,6 +60,29 @@ export async function getAsset(userId: string, assetId: string) {
   return rows[0] ?? null;
 }
 
+export async function getAssetByStorageKey(userId: string, storageKey: string) {
+  const rows = await getDb().select().from(assets).where(and(eq(assets.userId, userId), eq(assets.storageKey, storageKey))).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function restoreAssetForOutput(userId: string, assetId: string, input: {
+  mimeType?: string | null;
+  byteSize?: number | null;
+  metadata?: Record<string, unknown>;
+}) {
+  validateNonNegative(input.byteSize, "INVALID_BYTE_SIZE");
+  if (input.mimeType && input.mimeType.length > 255) throw new Error("INVALID_MIME_TYPE");
+  const rows = await getDb().update(assets).set({
+    deletedAt: null,
+    mimeType: input.mimeType ?? undefined,
+    byteSize: input.byteSize ?? undefined,
+    metadata: input.metadata ?? undefined,
+    updatedAt: new Date(),
+  }).where(and(eq(assets.id, assetId), eq(assets.userId, userId))).returning();
+  if (!rows[0]) throw new Error("ASSET_UPDATE_FAILED");
+  return rows[0];
+}
+
 export async function createAsset(userId: string, input: CreateAssetInput) {
   const name = input.name.trim();
   const storageKey = input.storageKey.trim();
