@@ -3,13 +3,6 @@ import { clerk } from "@clerk/testing/playwright";
 
 const projectName = "[E2E] Caddysoft authenticated gate";
 
-async function json(response: Awaited<ReturnType<typeof requestGet>>) {
-  return response.json() as Promise<Record<string, unknown>>;
-}
-
-type RequestResponse = Awaited<ReturnType<import("@playwright/test").APIRequestContext["get"]>>;
-type requestGet = (url: string) => Promise<RequestResponse>;
-
 test.describe("authenticated application gate", () => {
   test("Clerk session protects and unlocks the application", async ({ page }) => {
     await page.goto("/");
