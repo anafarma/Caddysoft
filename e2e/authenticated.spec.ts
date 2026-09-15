@@ -82,6 +82,7 @@ test.describe("authenticated application gate", () => {
     await page.goto("/");
     await expect(page.getByRole("heading", { name: "Create something cinematic." })).toBeVisible();
 
+    await page.goto("/sign-in");
     await clerk.signOut({ page });
     await page.goto("/");
 
