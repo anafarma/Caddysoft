@@ -11,14 +11,12 @@ const hasClerkConfig = Boolean(
   process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY && process.env.CLERK_SECRET_KEY,
 );
 
-const clerkProtectedMiddleware = clerkMiddleware(async (auth, req) => {
-  if (!isPublicRoute(req)) {
-    await auth.protect();
-  }
-});
-
-export default hasClerkConfig
-  ? clerkProtectedMiddleware
+const middleware = hasClerkConfig
+  ? clerkMiddleware(async (auth, req) => {
+      if (!isPublicRoute(req)) {
+        await auth.protect();
+      }
+    })
   : function missingClerkConfigMiddleware(req: Request) {
       const url = new URL(req.url);
       if (url.pathname.startsWith("/api/health")) {
@@ -33,6 +31,8 @@ export default hasClerkConfig
         { status: 503 },
       );
     };
+
+export default middleware;
 
 export const config = {
   matcher: [
