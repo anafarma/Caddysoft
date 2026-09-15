@@ -1,4 +1,5 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { NextResponse } from "next/server";
 
 const isPublicRoute = createRouteMatcher([
   "/sign-in(.*)",
@@ -6,11 +7,32 @@ const isPublicRoute = createRouteMatcher([
   "/api/health(.*)",
 ]);
 
-export default clerkMiddleware(async (auth, req) => {
+const hasClerkConfig = Boolean(
+  process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY && process.env.CLERK_SECRET_KEY,
+);
+
+const clerkProtectedMiddleware = clerkMiddleware(async (auth, req) => {
   if (!isPublicRoute(req)) {
     await auth.protect();
   }
 });
+
+export default hasClerkConfig
+  ? clerkProtectedMiddleware
+  : function missingClerkConfigMiddleware(req: Request) {
+      const url = new URL(req.url);
+      if (url.pathname.startsWith("/api/health")) {
+        return NextResponse.next();
+      }
+
+      return NextResponse.json(
+        {
+          error: "AUTH_CONFIGURATION_MISSING",
+          message: "Clerk runtime configuration is missing. Configure Preview environment variables before using the application.",
+        },
+        { status: 503 },
+      );
+    };
 
 export const config = {
   matcher: [
