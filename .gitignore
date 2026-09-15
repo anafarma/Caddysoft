@@ -19,6 +19,9 @@ out/
 # Test / coverage output
 coverage/
 .nyc_output/
+playwright/.clerk/
+playwright-report/
+test-results/
 
 # Logs
 *.log
