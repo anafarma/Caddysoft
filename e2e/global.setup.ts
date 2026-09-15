@@ -17,7 +17,7 @@ setup("authenticate E2E test user", async ({ page }) => {
     throw new Error("E2E_CLERK_USER_EMAIL is required for authenticated E2E tests.");
   }
 
-  await page.goto("/");
+  await page.goto("/sign-in");
   await clerk.signIn({ page, emailAddress });
   await page.goto("/");
 
